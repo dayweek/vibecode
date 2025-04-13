@@ -1,137 +1,131 @@
 let scl = 20;
-let snake;
-let food;
+let socket;
+let playerId;
+let players = new Map(); // Map of playerId -> player data
+let food = [];
 let score = 0;
-let baseSpeed = 10;  // Base frame rate
-let speedIncrement = 0.5;  // How much to increase speed by
+let baseSpeed = 10;
+let speedIncrement = 0.5;
+let lastUpdate = 0;
+const UPDATE_INTERVAL = 50; // Update every 50ms
+let lastFrameTime = 0;
+const FRAME_INTERVAL = 1000 / baseSpeed; // Target frame interval in milliseconds
 
 function setup() {
     createCanvas(600, 600);
     frameRate(baseSpeed);
-    snake = new Snake();
-    food = new Food();
+    
+    // Connect to Socket.io server
+    socket = io();
+    
+    socket.on('connect', () => {
+        console.log('Connected to server');
+    });
+    
+    socket.on('init', (data) => {
+        playerId = data.playerId;
+        // Initialize all players
+        data.gameState.players.forEach(player => {
+            players.set(player.id, player);
+        });
+        food = data.gameState.food;
+    });
+    
+    socket.on('gameState', (state) => {
+        // Update all players
+        state.players.forEach(player => {
+            players.set(player.id, player);
+        });
+        food = state.food;
+    });
+    
+    socket.on('playerLeft', (id) => {
+        players.delete(id);
+    });
+
+    // Reset button listener
+    const resetButton = document.getElementById('resetButton');
+    if (resetButton) {
+        resetButton.addEventListener('click', () => {
+            if (socket && playerId) {
+                console.log('Sending reset request...');
+                socket.emit('resetGame');
+            }
+        });
+    } else {
+        console.error("Reset button not found!");
+    }
 }
 
 function draw() {
-    background(51);
+    const currentTime = millis();
+    const deltaTime = currentTime - lastFrameTime;
     
-    if (snake.eat(food.pos)) {
-        food.pickLocation();
-        score++;
+    if (deltaTime >= FRAME_INTERVAL) {
+        lastFrameTime = currentTime;
+        
+        background(51);
+        
+        // Draw all players
+        players.forEach((player, id) => {
+            // Draw snake segments
+            fill(player.color);
+            player.segments.forEach(segment => {
+                rect(segment.x, segment.y, scl, scl);
+            });
+            
+            // Draw score
+            if (id === playerId) {
+                score = player.score;
+                fill(255);
+                textSize(20);
+                textAlign(LEFT);
+                text("Score: " + score, 10, height - 10);
+            }
+        });
+        
+        // Draw food
+        fill(255, 0, 100);
+        food.forEach(f => {
+            rect(f.x, f.y, scl, scl);
+        });
+        
+        // Draw player list
+        drawPlayerList();
     }
     
-    snake.death();
-    snake.update();
-    snake.show();
-    
-    food.show();
-    
-    // Display score
+    // Request next frame
+    requestAnimationFrame(draw);
+}
+
+function drawPlayerList() {
     fill(255);
-    textSize(20);
+    textSize(16);
     textAlign(LEFT);
-    text("Score: " + score, 10, height - 10);
+    let y = 20;
+    players.forEach((player, id) => {
+        fill(player.color);
+        text(`Player ${id === playerId ? '(You)' : ''}: ${player.score}`, 10, y);
+        y += 20;
+    });
 }
 
 function keyPressed() {
-    if (keyCode === UP_ARROW && snake.yspeed !== 1) {
-        snake.dir(0, -1);
-    } else if (keyCode === DOWN_ARROW && snake.yspeed !== -1) {
-        snake.dir(0, 1);
-    } else if (keyCode === RIGHT_ARROW && snake.xspeed !== -1) {
-        snake.dir(1, 0);
-    } else if (keyCode === LEFT_ARROW && snake.xspeed !== 1) {
-        snake.dir(-1, 0);
+    if (!players.has(playerId)) return;
+    
+    let direction = { x: 0, y: 0 };
+    
+    if (keyCode === UP_ARROW) {
+        direction = { x: 0, y: -1 };
+    } else if (keyCode === DOWN_ARROW) {
+        direction = { x: 0, y: 1 };
+    } else if (keyCode === RIGHT_ARROW) {
+        direction = { x: 1, y: 0 };
+    } else if (keyCode === LEFT_ARROW) {
+        direction = { x: -1, y: 0 };
     }
-}
-
-class Snake {
-    constructor() {
-        this.x = 0;
-        this.y = 0;
-        this.xspeed = 1;
-        this.yspeed = 0;
-        this.total = 0;
-        this.tail = [];
-    }
-
-    dir(x, y) {
-        this.xspeed = x;
-        this.yspeed = y;
-    }
-
-    eat(pos) {
-        let d = dist(this.x, this.y, pos.x, pos.y);
-        if (d < 1) {
-            this.total++;
-            // Increase speed
-            frameRate(baseSpeed + (score * speedIncrement));
-            return true;
-        }
-        return false;
-    }
-
-    death() {
-        for (let i = 0; i < this.tail.length; i++) {
-            let pos = this.tail[i];
-            let d = dist(this.x, this.y, pos.x, pos.y);
-            if (d < 1) {
-                this.total = 0;
-                this.tail = [];
-                score = 0;
-                // Reset speed when game over
-                frameRate(baseSpeed);
-            }
-        }
-    }
-
-    update() {
-        if (this.total === this.tail.length) {
-            for (let i = 0; i < this.tail.length - 1; i++) {
-                this.tail[i] = this.tail[i + 1];
-            }
-        }
-        this.tail[this.total - 1] = createVector(this.x, this.y);
-
-        this.x = this.x + this.xspeed * scl;
-        this.y = this.y + this.yspeed * scl;
-
-        // Wrap around the screen
-        if (this.x > width - scl) {
-            this.x = 0;
-        } else if (this.x < 0) {
-            this.x = width - scl;
-        }
-        if (this.y > height - scl) {
-            this.y = 0;
-        } else if (this.y < 0) {
-            this.y = height - scl;
-        }
-    }
-
-    show() {
-        fill(255);
-        for (let i = 0; i < this.tail.length; i++) {
-            rect(this.tail[i].x, this.tail[i].y, scl, scl);
-        }
-        rect(this.x, this.y, scl, scl);
-    }
-}
-
-class Food {
-    constructor() {
-        this.pickLocation();
-    }
-
-    pickLocation() {
-        let cols = floor(width / scl);
-        let rows = floor(height / scl);
-        this.pos = createVector(floor(random(cols)), floor(random(rows)));
-        this.pos.mult(scl);
-    }
-
-    show() {
-        fill(255, 0, 100);
-        rect(this.pos.x, this.pos.y, scl, scl);
+    
+    if (direction.x !== 0 || direction.y !== 0) {
+        socket.emit('direction', direction);
     }
 } 
