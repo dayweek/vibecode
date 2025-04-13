@@ -92,13 +92,13 @@ function setup() {
     // Music toggle listener
     const toggleMusicButton = document.getElementById('toggleMusicButton');
     const backgroundMusic = document.getElementById('backgroundMusic');
+    const eatSound = document.getElementById('eatSound');
+    const dieSound = document.getElementById('dieSound');
+    const newSound = document.getElementById('newSound');
 
     if (toggleMusicButton && backgroundMusic) {
         let isMusicPlaying = true; // Start assuming music is playing (or will play soon)
-        const eatSound = document.getElementById('eatSound');
-        const dieSound = document.getElementById('dieSound');
-        const newSound = document.getElementById('newSound');
-
+        
         // Attempt to play music immediately
         backgroundMusic.play().catch(error => {
             console.error("Initial music play failed (browser might require user interaction first):", error);
