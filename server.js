@@ -9,24 +9,36 @@ const io = socketIO(server);
 
 // Available colors for players
 const COLORS = [
+    // Primary/Secondary
     '#FF0000', // Red
     '#00FF00', // Lime
     '#0000FF', // Blue
     '#FFFF00', // Yellow
     '#FF00FF', // Magenta
     '#00FFFF', // Cyan
+    // Tertiary/Other
     '#FFA500', // Orange
     '#800080', // Purple
     '#FFFFFF', // White
-    '#ADD8E6'  // LightBlue
+    '#008000', // Green
+    '#ADD8E6', // LightBlue
+    '#FFC0CB', // Pink
+    '#A52A2A', // Brown
+    '#808080', // Gray
+    '#FFD700', // Gold
+    '#40E0D0', // Turquoise
+    '#FA8072', // Salmon
+    '#90EE90', // LightGreen
+    '#E6E6FA', // Lavender
+    '#D2B48C'  // Tan
 ];
 
 // Game state
 const gameState = {
     players: new Map(), // Map of playerId -> player data
     food: [],
-    width: 600,
-    height: 600,
+    width: 800,
+    height: 800,
     scale: 20,
     updateInterval: 50, // ms per game update tick
     baseMoveInterval: 200, // ms between moves at base speed
@@ -170,11 +182,38 @@ function broadcastGameState() {
     io.emit('gameState', state);
 }
 
+// Function to handle disconnection (used by inactivity check and socket disconnect)
+function handleDisconnect(playerId) {
+    console.log(`Disconnecting player ${playerId}...`);
+    const player = gameState.players.get(playerId);
+    if (player) {
+        gameState.usedColors.delete(player.color); // Release the color
+        gameState.players.delete(playerId);
+        io.emit('playerLeft', playerId); // Notify clients
+    }
+}
+
 // Start game loop
 setInterval(() => {
     updateGameState();
     broadcastGameState();
 }, gameState.updateInterval); // Use defined interval
+
+// Start inactivity check loop
+const INACTIVITY_TIMEOUT = 20000; // 20 seconds
+setInterval(() => {
+    const now = Date.now();
+    gameState.players.forEach((player, playerId) => {
+        if (now - player.lastActivityTime > INACTIVITY_TIMEOUT) {
+            console.log(`Player ${playerId} timed out due to inactivity.`);
+            const targetSocket = io.sockets.sockets.get(playerId);
+            if (targetSocket) {
+                targetSocket.disconnect(true); // Force disconnect socket
+            }
+            handleDisconnect(playerId); // Clean up game state
+        }
+    });
+}, 1000); // Check every second
 
 // Socket connection handling
 io.on('connection', (socket) => {
@@ -191,7 +230,8 @@ io.on('connection', (socket) => {
         direction: { x: 1, y: 0 },
         score: 0,
         color: color,
-        lastMoveTime: Date.now() // Initialize move timer
+        lastMoveTime: Date.now(), // Initialize move timer
+        lastActivityTime: Date.now() // Initialize activity timer
     };
     gameState.players.set(socket.id, newPlayer);
 
@@ -213,6 +253,7 @@ io.on('connection', (socket) => {
     socket.on('direction', (direction) => {
         const player = gameState.players.get(socket.id);
         if (player && player.segments.length > 0) { // Check if player exists and has segments
+            player.lastActivityTime = Date.now(); // Update activity time
             // Prevent 180-degree turns only if snake has more than one segment
             const isOppositeDirection = player.direction.x === -direction.x && player.direction.y === -direction.y;
             if (!(player.segments.length > 1 && isOppositeDirection)) {
@@ -259,12 +300,7 @@ io.on('connection', (socket) => {
     // Handle disconnection
     socket.on('disconnect', () => {
         console.log('Player disconnected:', socket.id);
-        const player = gameState.players.get(socket.id);
-        if (player) {
-            gameState.usedColors.delete(player.color); // Release the color
-            gameState.players.delete(socket.id);
-            io.emit('playerLeft', socket.id);
-        }
+        handleDisconnect(socket.id);
     });
 });
 

@@ -12,7 +12,7 @@ let lastFrameTime = 0;
 const FRAME_INTERVAL = 1000 / baseSpeed; // Target frame interval in milliseconds
 
 function setup() {
-    createCanvas(600, 600);
+    createCanvas(800, 800);
     frameRate(baseSpeed);
     
     // Connect to Socket.io server
@@ -68,19 +68,25 @@ function draw() {
         
         // Draw all players
         players.forEach((player, id) => {
-            // Draw snake segments
-            fill(player.color);
-            player.segments.forEach(segment => {
-                rect(segment.x, segment.y, scl, scl);
-            });
-            
-            // Draw score
-            if (id === playerId) {
-                score = player.score;
-                fill(255);
-                textSize(20);
-                textAlign(LEFT);
-                text("Score: " + score, 10, height - 10);
+            // Add checks to ensure player and segments exist before drawing
+            if (player && player.segments && Array.isArray(player.segments) && player.color) {
+                fill(player.color);
+                player.segments.forEach(segment => {
+                    if (segment && typeof segment.x === 'number' && typeof segment.y === 'number') {
+                        rect(segment.x, segment.y, scl, scl);
+                    }
+                });
+
+                // Draw score for the local player
+                if (id === playerId) {
+                    score = player.score;
+                    fill(255);
+                    textSize(20);
+                    textAlign(LEFT);
+                    text("Score: " + score, 10, height - 10);
+                }
+            } else {
+                 console.warn(`Attempted to draw invalid player data for ID: ${id}`);
             }
         });
         
