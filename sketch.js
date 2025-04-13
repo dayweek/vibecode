@@ -76,6 +76,13 @@ function setup() {
         }
     });
 
+    socket.on('playWinSound', () => {
+        if (winSound) {
+            winSound.currentTime = 0; // Rewind to start
+            winSound.play().catch(e => console.error("Error playing win sound:", e));
+        }
+    });
+
     // Reset button listener
     const resetButton = document.getElementById('resetButton');
     if (resetButton) {
@@ -95,6 +102,7 @@ function setup() {
     const eatSound = document.getElementById('eatSound');
     const dieSound = document.getElementById('dieSound');
     const newSound = document.getElementById('newSound');
+    const winSound = document.getElementById('winSound');
 
     if (toggleMusicButton && backgroundMusic) {
         let isMusicPlaying = true; // Start assuming music is playing (or will play soon)

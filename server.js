@@ -149,6 +149,7 @@ function updateGameState() {
                     if (player.score >= gameState.winningScore) {
                         gameState.winnerId = playerId;
                         console.log(`Player ${playerId} wins!`);
+                        io.emit('playWinSound'); // Emit win sound to all
                     }
 
                     // Remove eaten food
