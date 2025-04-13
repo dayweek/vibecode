@@ -272,6 +272,13 @@ io.on('connection', (socket) => {
         }
     });
 
+    // Notify all players about the new player (and play sound)
+    io.emit('playerJoined', { 
+        playerId: socket.id, 
+        playerData: newPlayer 
+    }); 
+    io.emit('playNewSound');
+
     // Handle direction changes
     socket.on('direction', (direction) => {
         const player = gameState.players.get(socket.id);

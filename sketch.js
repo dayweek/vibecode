@@ -47,6 +47,13 @@ function setup() {
         players.delete(id);
     });
 
+    // Add new player when notified by server
+    socket.on('playerJoined', (data) => {
+        if (data.playerId !== playerId) { // Don't re-add self if already initialized
+            players.set(data.playerId, data.playerData);
+        }
+    });
+
     // Listen for sound effect events
     socket.on('playEatSound', () => {
         if (eatSound) {
@@ -59,6 +66,13 @@ function setup() {
         if (dieSound) {
             dieSound.currentTime = 0; // Rewind to start
             dieSound.play().catch(e => console.error("Error playing die sound:", e));
+        }
+    });
+
+    socket.on('playNewSound', () => {
+        if (newSound) {
+            newSound.currentTime = 0; // Rewind to start
+            newSound.play().catch(e => console.error("Error playing new sound:", e));
         }
     });
 
@@ -83,6 +97,7 @@ function setup() {
         let isMusicPlaying = true; // Start assuming music is playing (or will play soon)
         const eatSound = document.getElementById('eatSound');
         const dieSound = document.getElementById('dieSound');
+        const newSound = document.getElementById('newSound');
 
         // Attempt to play music immediately
         backgroundMusic.play().catch(error => {
