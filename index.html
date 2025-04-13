@@ -17,16 +17,34 @@
             color: white;
             font-family: Arial, sans-serif;
         }
+        #game-container {
+            display: flex;
+            flex-direction: column; /* Stack canvas and buttons vertically */
+            align-items: center; /* Center items horizontally */
+        }
         canvas {
             border: 2px solid #333;
+            margin-bottom: 10px; /* Add space below canvas */
+        }
+        #controls {
+            display: flex; /* Align buttons horizontally */
+            gap: 10px; /* Space between buttons */
         }
     </style>
 </head>
 <body>
     <div id="game-container">
         <!-- Canvas will be created by p5.js -->
-        <button id="resetButton">Reset Game</button>
+        <div id="controls">
+            <button id="resetButton">Reset Game</button>
+            <button id="toggleMusicButton">Pause Music</button> 
+        </div>
     </div>
+
+    <audio id="backgroundMusic" src="Pixelated Love.mp3" loop></audio>
+    <audio id="eatSound" src="eat.mp3"></audio>
+    <audio id="dieSound" src="die.mp3"></audio>
+
     <script src="sketch.js"></script>
 </body>
 

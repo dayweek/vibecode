@@ -43,7 +43,9 @@ const gameState = {
     updateInterval: 50, // ms per game update tick
     baseMoveInterval: 200, // ms between moves at base speed
     speedFactor: 0.95, // Speed multiplier per score point (lower is faster)
-    usedColors: new Set() // Keep track of colors currently in use
+    usedColors: new Set(), // Keep track of colors currently in use
+    winnerId: null, // ID of the winning player
+    winningScore: 20 // Score needed to win
 };
 
 // Function to get the next available color
@@ -97,6 +99,9 @@ app.use(express.static('.'));
 function updateGameState() {
     const now = Date.now();
 
+    // Pause game logic if there's a winner
+    if (gameState.winnerId) return;
+
     gameState.players.forEach((player, playerId) => {
         // Determine time needed for next move based on score
         const moveInterval = gameState.baseMoveInterval * Math.pow(gameState.speedFactor, player.score);
@@ -135,10 +140,23 @@ function updateGameState() {
                     player.segments.push(tailPosition);
                     player.score++;
                     ateFood = true;
+
+                    // Emit sound effect event to the player
+                    const playerSocket = io.sockets.sockets.get(playerId);
+                    if (playerSocket) playerSocket.emit('playEatSound');
+
+                    // Check for win condition
+                    if (player.score >= gameState.winningScore) {
+                        gameState.winnerId = playerId;
+                        console.log(`Player ${playerId} wins!`);
+                    }
+
                     // Remove eaten food
                     gameState.food.splice(index, 1);
-                    // Generate new food
-                    generateFood(1);
+                    // Generate new food only if no winner yet
+                    if (!gameState.winnerId) {
+                        generateFood(1);
+                    }
                 }
             });
 
@@ -155,6 +173,10 @@ function updateGameState() {
             });
             
             if (collisionDetected) {
+                // Emit sound effect event to the player
+                const playerSocket = io.sockets.sockets.get(playerId);
+                if (playerSocket) playerSocket.emit('playDieSound');
+
                 // Reset player on collision
                 player.segments = [{ x: Math.floor(Math.random() * (gameState.width / gameState.scale)) * gameState.scale,
                                    y: Math.floor(Math.random() * (gameState.height / gameState.scale)) * gameState.scale }];
@@ -176,6 +198,7 @@ function broadcastGameState() {
             color: player.color
         })),
         food: gameState.food,
+        winnerId: gameState.winnerId,
         timestamp: Date.now()
     };
 
@@ -301,6 +324,30 @@ io.on('connection', (socket) => {
     socket.on('disconnect', () => {
         console.log('Player disconnected:', socket.id);
         handleDisconnect(socket.id);
+    });
+
+    // Handle restart request
+    socket.on('requestRestart', () => {
+        // Only allow restart if there is a winner
+        if (gameState.winnerId) {
+            console.log(`Restart requested by ${socket.id}. Resetting game...`);
+            gameState.winnerId = null; // Clear the winner
+            gameState.food = []; // Clear existing food
+            generateFood(5); // Generate new food
+
+            // Reset all players
+            gameState.players.forEach((player, id) => {
+                player.score = 0;
+                player.segments = [{ x: Math.floor(Math.random() * (gameState.width / gameState.scale)) * gameState.scale,
+                                   y: Math.floor(Math.random() * (gameState.height / gameState.scale)) * gameState.scale }];
+                player.direction = { x: 1, y: 0 };
+                player.lastMoveTime = Date.now();
+                player.lastActivityTime = Date.now();
+            });
+
+            // Broadcast the reset state immediately
+            broadcastGameState();
+        }
     });
 });
 

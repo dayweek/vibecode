@@ -4,6 +4,7 @@ let playerId;
 let players = new Map(); // Map of playerId -> player data
 let food = [];
 let score = 0;
+let winnerId = null; // Track the winner locally
 let baseSpeed = 10;
 let speedIncrement = 0.5;
 let lastUpdate = 0;
@@ -12,7 +13,9 @@ let lastFrameTime = 0;
 const FRAME_INTERVAL = 1000 / baseSpeed; // Target frame interval in milliseconds
 
 function setup() {
-    createCanvas(800, 800);
+    const canvas = createCanvas(800, 800);
+    // Parent the canvas to the game-container div
+    canvas.parent('game-container'); 
     frameRate(baseSpeed);
     
     // Connect to Socket.io server
@@ -37,10 +40,26 @@ function setup() {
             players.set(player.id, player);
         });
         food = state.food;
+        winnerId = state.winnerId; // Update local winnerId from state
     });
     
     socket.on('playerLeft', (id) => {
         players.delete(id);
+    });
+
+    // Listen for sound effect events
+    socket.on('playEatSound', () => {
+        if (eatSound) {
+            eatSound.currentTime = 0; // Rewind to start
+            eatSound.play().catch(e => console.error("Error playing eat sound:", e));
+        }
+    });
+
+    socket.on('playDieSound', () => {
+        if (dieSound) {
+            dieSound.currentTime = 0; // Rewind to start
+            dieSound.play().catch(e => console.error("Error playing die sound:", e));
+        }
     });
 
     // Reset button listener
@@ -54,6 +73,39 @@ function setup() {
         });
     } else {
         console.error("Reset button not found!");
+    }
+
+    // Music toggle listener
+    const toggleMusicButton = document.getElementById('toggleMusicButton');
+    const backgroundMusic = document.getElementById('backgroundMusic');
+
+    if (toggleMusicButton && backgroundMusic) {
+        let isMusicPlaying = true; // Start assuming music is playing (or will play soon)
+        const eatSound = document.getElementById('eatSound');
+        const dieSound = document.getElementById('dieSound');
+
+        // Attempt to play music immediately
+        backgroundMusic.play().catch(error => {
+            console.error("Initial music play failed (browser might require user interaction first):", error);
+            // If play failed initially, update state and button text
+            isMusicPlaying = false;
+            toggleMusicButton.textContent = 'Play Music'; 
+        });
+
+        toggleMusicButton.addEventListener('click', () => {
+            if (isMusicPlaying) {
+                backgroundMusic.pause();
+                toggleMusicButton.textContent = 'Play Music';
+            } else {
+                backgroundMusic.play().catch(error => {
+                    console.error("Error playing music:", error);
+                });
+                toggleMusicButton.textContent = 'Pause Music';
+            }
+            isMusicPlaying = !isMusicPlaying;
+        });
+    } else {
+        console.error("Music elements not found!");
     }
 }
 
@@ -98,6 +150,11 @@ function draw() {
         
         // Draw player list
         drawPlayerList();
+
+        // Draw winner message if applicable
+        if (winnerId) {
+            drawWinnerMessage();
+        }
     }
     
     // Request next frame
@@ -116,7 +173,30 @@ function drawPlayerList() {
     });
 }
 
+function drawWinnerMessage() {
+    const winner = players.get(winnerId);
+    const winnerName = winnerId === playerId ? "You" : `Player ${winnerId.substring(0, 6)}...`; // Shorten ID for display
+    const message = winner ? `${winnerName} wins with ${winner.score} points!` : "Game Over!";
+    
+    fill(0, 0, 0, 150); // Semi-transparent background
+    rect(0, height / 2 - 50, width, 100);
+    
+    fill(255);
+    textSize(32);
+    textAlign(CENTER, CENTER);
+    text(message, width / 2, height / 2 - 10);
+    textSize(16);
+    text("Press any key to restart", width / 2, height / 2 + 30);
+}
+
 function keyPressed() {
+    // If there is a winner, any key press requests a restart
+    if (winnerId) {
+        socket.emit('requestRestart');
+        return; // Don't process regular direction input
+    }
+
+    // Otherwise, handle direction changes
     if (!players.has(playerId)) return;
     
     let direction = { x: 0, y: 0 };
