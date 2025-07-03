@@ -5,6 +5,8 @@ let players = new Map(); // Map of playerId -> player data
 let food = [];
 let score = 0;
 let winnerId = null; // Track the winner locally
+let winnerDetectedTime = null; // Track when winner was first detected
+let winDelaySeconds = 3; // Delay in seconds before allowing restart
 let baseSpeed = 10;
 let speedIncrement = 0.5;
 let lastUpdate = 0;
@@ -40,6 +42,17 @@ function setup() {
             players.set(player.id, player);
         });
         food = state.food;
+        
+        // Check if this is the first time we're detecting a winner
+        if (state.winnerId && !winnerId) {
+            winnerDetectedTime = Date.now(); // Record when we first detected the winner
+        }
+        
+        // Reset winner tracking when game restarts (winnerId becomes null)
+        if (!state.winnerId && winnerId) {
+            winnerDetectedTime = null;
+        }
+        
         winnerId = state.winnerId; // Update local winnerId from state
     });
     
@@ -208,14 +221,38 @@ function drawWinnerMessage() {
     textSize(32);
     textAlign(CENTER, CENTER);
     text(message, width / 2, height / 2 - 10);
+    
+    // Show countdown or restart message
     textSize(16);
-    text("Press any key to restart", width / 2, height / 2 + 30);
+    if (winnerDetectedTime) {
+        const elapsedTime = (Date.now() - winnerDetectedTime) / 1000; // Convert to seconds
+        const remainingTime = Math.max(0, winDelaySeconds - elapsedTime);
+        
+        if (remainingTime > 0) {
+            text(`Next game starts in ${Math.ceil(remainingTime)} seconds...`, width / 2, height / 2 + 30);
+        } else {
+            text("Press any key to restart", width / 2, height / 2 + 30);
+        }
+    } else {
+        text("Press any key to restart", width / 2, height / 2 + 30);
+    }
 }
 
 function keyPressed() {
-    // If there is a winner, any key press requests a restart
+    // If there is a winner, check if enough time has passed before allowing restart
     if (winnerId) {
-        socket.emit('requestRestart');
+        if (winnerDetectedTime) {
+            const elapsedTime = (Date.now() - winnerDetectedTime) / 1000; // Convert to seconds
+            if (elapsedTime >= winDelaySeconds) {
+                socket.emit('requestRestart');
+                // Reset the winner tracking when restarting
+                winnerDetectedTime = null;
+            }
+            // If not enough time has passed, do nothing (ignore key press)
+        } else {
+            // Fallback in case winnerDetectedTime is not set
+            socket.emit('requestRestart');
+        }
         return; // Don't process regular direction input
     }
 
