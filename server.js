@@ -109,6 +109,12 @@ function updateGameState() {
         // Check if enough time has passed to move
         if (now - player.lastMoveTime >= moveInterval) {
             player.lastMoveTime = now; // Reset move timer
+            
+            // Apply pending direction change at the moment of movement to prevent race conditions
+            if (player.pendingDirection) {
+                player.direction = player.pendingDirection;
+                player.pendingDirection = null; // Clear pending direction
+            }
 
             // Calculate new head position (one grid cell)
             const newHeadX = player.segments[0].x + player.direction.x * gameState.scale;
@@ -183,6 +189,7 @@ function updateGameState() {
                                    y: Math.floor(Math.random() * (gameState.height / gameState.scale)) * gameState.scale }];
                 player.score = 0;
                 player.direction = { x: 1, y: 0 }; // Reset direction
+                player.pendingDirection = null; // Clear any pending direction
                 player.lastMoveTime = now; // Reset move timer immediately
             }
         }
@@ -252,6 +259,7 @@ io.on('connection', (socket) => {
         segments: [{ x: Math.floor(Math.random() * (gameState.width / gameState.scale)) * gameState.scale,
                      y: Math.floor(Math.random() * (gameState.height / gameState.scale)) * gameState.scale }], // Start at random grid position
         direction: { x: 1, y: 0 },
+        pendingDirection: null, // Initialize pending direction for race condition prevention
         score: 0,
         color: color,
         lastMoveTime: Date.now(), // Initialize move timer
@@ -285,10 +293,15 @@ io.on('connection', (socket) => {
         const player = gameState.players.get(socket.id);
         if (player && player.segments.length > 0) { // Check if player exists and has segments
             player.lastActivityTime = Date.now(); // Update activity time
+            
+            // Use pending direction to prevent race conditions from rapid key presses
+            const currentDirection = player.pendingDirection || player.direction;
+            
             // Prevent 180-degree turns only if snake has more than one segment
-            const isOppositeDirection = player.direction.x === -direction.x && player.direction.y === -direction.y;
+            const isOppositeDirection = currentDirection.x === -direction.x && currentDirection.y === -direction.y;
             if (!(player.segments.length > 1 && isOppositeDirection)) {
-                player.direction = direction;
+                // Store the new direction as pending, to be applied on next move
+                player.pendingDirection = direction;
             }
         }
     });
@@ -322,6 +335,7 @@ io.on('connection', (socket) => {
         playerToKeep.segments = [{ x: Math.floor(Math.random() * (gameState.width / gameState.scale)) * gameState.scale,
                                    y: Math.floor(Math.random() * (gameState.height / gameState.scale)) * gameState.scale }];
         playerToKeep.direction = { x: 1, y: 0 }; // Optional: Reset direction too
+        playerToKeep.pendingDirection = null; // Clear any pending direction
         playerToKeep.lastMoveTime = Date.now(); // Prevent immediate move
 
         // Broadcast the updated state (now with only one player, reset)
@@ -344,11 +358,12 @@ io.on('connection', (socket) => {
             generateFood(5); // Generate new food
 
             // Reset all players
-            gameState.players.forEach((player, id) => {
+            gameState.players.forEach((player) => {
                 player.score = 0;
                 player.segments = [{ x: Math.floor(Math.random() * (gameState.width / gameState.scale)) * gameState.scale,
                                    y: Math.floor(Math.random() * (gameState.height / gameState.scale)) * gameState.scale }];
                 player.direction = { x: 1, y: 0 };
+                player.pendingDirection = null; // Clear any pending direction
                 player.lastMoveTime = Date.now();
                 player.lastActivityTime = Date.now();
             });
