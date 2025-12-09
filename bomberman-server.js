@@ -34,7 +34,7 @@ class BombermanGame {
             explosionDuration: 500, // 0.5 seconds
             baseExplosionRange: 1, // Base explosion range for new players
             destructibleWallDensity: 0.4, // 40% of non-indestructible tiles
-            hiddenBombChance: 0.25, // 25% of destructible walls contain bombs
+            hiddenBombChance: 0.333, // 33.3% of destructible walls contain bombs (2x flame powerups)
             flamePowerupChance: 0.25, // 25% chance to spawn flame powerup when wall destroyed
             speedPowerupChance: 0.25, // 25% chance to spawn speed powerup when wall destroyed
             invisibilityPowerupChance: 0.05, // 5% chance to spawn invisibility powerup (rare)
@@ -317,27 +317,53 @@ class BombermanGame {
         const wallsToDestroy = new Set();
 
         // Update bombs (check for explosions)
-        this.gameState.bombs = this.gameState.bombs.filter(bomb => {
+        const bombsToExplode = new Set();
+        const bombsQueue = [];
+
+        // 1. Identify natural explosions (fuse expired)
+        this.gameState.bombs.forEach(bomb => {
             const timeElapsed = now - bomb.placedTime;
-
             if (timeElapsed >= this.gameState.bombFuseTime) {
-                // Get the player who placed the bomb to use their bombRange
-                const player = this.gameState.players.get(bomb.playerId);
-                const bombRange = player ? player.bombRange : this.gameState.baseExplosionRange;
-
-                // Bomb explodes - pass the bomb range AND the walls set
-                this.createExplosion(bomb.x, bomb.y, wallsToDestroy, bombRange);
-
-                // Decrement activeBombs for the player who placed it
-                if (player && player.activeBombs > 0) {
-                    player.activeBombs--;
+                if (!bombsToExplode.has(bomb)) {
+                    bombsToExplode.add(bomb);
+                    bombsQueue.push(bomb);
                 }
-
-                return false; // Remove bomb
             }
-
-            return true; // Keep bomb
         });
+
+        // 2. Process chain reactions
+        // Execute explosions for all bombs in queue, adding any chained bombs to the queue
+        let head = 0;
+        while(head < bombsQueue.length) {
+            const bomb = bombsQueue[head];
+            head++;
+            
+            // Get the player to determine bomb range
+            const placingPlayer = this.gameState.players.get(bomb.playerId);
+            const range = placingPlayer ? placingPlayer.bombRange : 1;
+
+            // createExplosion now returns an array of bombs hit by this explosion
+            // It modifies game state (adds explosion tiles) but DOES NOT remove bombs or recurse
+            const hitBombs = this.createExplosion(bomb.x, bomb.y, wallsToDestroy, range);
+            
+            hitBombs.forEach(hitBomb => {
+                if (!bombsToExplode.has(hitBomb)) {
+                    bombsToExplode.add(hitBomb);
+                    bombsQueue.push(hitBomb);
+                }
+            });
+            
+            // Decrement activeBombs for the player who placed it
+            const player = this.gameState.players.get(bomb.playerId);
+            if (player && player.activeBombs > 0) {
+                player.activeBombs--;
+            }
+        }
+
+        // 3. Remove all exploded bombs from game state
+        if (bombsToExplode.size > 0) {
+            this.gameState.bombs = this.gameState.bombs.filter(bomb => !bombsToExplode.has(bomb));
+        }
 
         // Process deferred wall destruction
         if (wallsToDestroy.size > 0) {
@@ -350,28 +376,10 @@ class BombermanGame {
                     if (wall.hasHiddenBomb) {
                         this.gameState.bombPickups.push({ x: wall.x, y: wall.y });
                     }
-                    // Random chance to spawn powerups (check in order: invisibility, flame, speed)
-                    else {
-                        const roll = Math.random();
-                        if (roll < this.gameState.invisibilityPowerupChance) {
-                            this.gameState.powerups.push({
-                                x: wall.x,
-                                y: wall.y,
-                                type: 'invisibility' // Makes player invisible for 10 seconds
-                            });
-                        } else if (roll < this.gameState.invisibilityPowerupChance + this.gameState.flamePowerupChance) {
-                            this.gameState.powerups.push({
-                                x: wall.x,
-                                y: wall.y,
-                                type: 'flame' // Increases bomb explosion range
-                            });
-                        } else if (roll < this.gameState.invisibilityPowerupChance + this.gameState.flamePowerupChance + this.gameState.speedPowerupChance) {
-                            this.gameState.powerups.push({
-                                x: wall.x,
-                                y: wall.y,
-                                type: 'speed' // Increases movement speed by 10%
-                            });
-                        }
+                    // Check for powerup (random chance)
+                    if (Math.random() < this.gameState.powerupChance) {
+                        const type = Math.random() < 0.5 ? 'flame' : (Math.random() < 0.5 ? 'speed' : 'invisibility');
+                        this.gameState.powerups.push({ x: wall.x, y: wall.y, type });
                     }
                     return false; // Remove from array
                 }
@@ -585,28 +593,9 @@ class BombermanGame {
             }
         });
 
-        // Trigger chain explosions for bombs caught in this explosion
-        bombsToChainExplode.forEach(bomb => {
-            // Remove the bomb from the array
-            const bombIndex = this.gameState.bombs.findIndex(
-                b => b.x === bomb.x && b.y === bomb.y
-            );
-            if (bombIndex !== -1) {
-                this.gameState.bombs.splice(bombIndex, 1);
-
-                // Decrement activeBombs for the player who placed it
-                const player = this.gameState.players.get(bomb.playerId);
-                if (player && player.activeBombs > 0) {
-                    player.activeBombs--;
-                }
-
-                // Get the range for the chain-exploded bomb
-                const chainBombRange = player ? player.bombRange : this.gameState.baseExplosionRange;
-
-                // Trigger explosion at bomb location (chain reaction)
-                this.createExplosion(bomb.x, bomb.y, wallsToDestroy, chainBombRange);
-            }
-        });
+        // Return the list of bombs hit by this explosion
+        // The chain reaction is handled iteratively in updateGameState
+        return bombsToChainExplode;
     }
 
     broadcastGameState() {
@@ -803,6 +792,14 @@ class BombermanGame {
             // Handle bomb placement
             socket.on('placeBomb', () => {
                 const player = this.gameState.players.get(socket.id);
+
+                if (!player) {
+                    console.log(`[placeBomb] Player ${socket.id} not found in game state`);
+                    return;
+                }
+
+                console.log(`[placeBomb] Player ${socket.id.substring(0, 6)}: alive=${player.alive}, activeBombs=${player.activeBombs}, maxBombs=${player.maxBombs}`);
+
                 if (player && player.alive && player.activeBombs < player.maxBombs) {
                     player.lastActivityTime = Date.now();
 
@@ -821,7 +818,12 @@ class BombermanGame {
 
                         player.activeBombs++; // Increment active bomb count
                         player.lastBombPlacedTime = Date.now(); // Track when bomb was placed
+                        console.log(`[placeBomb] Player ${socket.id.substring(0, 6)} placed bomb. activeBombs now: ${player.activeBombs}`);
+                    } else {
+                        console.log(`[placeBomb] Player ${socket.id.substring(0, 6)}: bomb already exists at position`);
                     }
+                } else {
+                    console.log(`[placeBomb] Player ${socket.id.substring(0, 6)}: cannot place bomb (alive=${player.alive}, activeBombs=${player.activeBombs} >= maxBombs=${player.maxBombs})`);
                 }
             });
 
