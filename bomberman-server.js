@@ -19,9 +19,9 @@ class BombermanGame {
             explosions: [],
             indestructibleWalls: [], // Permanent walls
             destructibleWalls: [], // Walls that can be destroyed
-            width: 960,
-            height: 800,
-            scale: 30,
+            width: 1024,
+            height: 864,
+            scale: 32,
             cols: 32,
             rows: 27,
             updateInterval: 100, // ms per game update tick

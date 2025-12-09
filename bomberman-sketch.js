@@ -1,4 +1,4 @@
-let scl = 30; // Tile size (reduced for 50% more density)
+let scl = 32; // Tile size
 let socket;
 let playerId;
 let players = new Map(); // Map of playerId -> player data
@@ -17,7 +17,53 @@ let directionKeys = []; // Track order of pressed direction keys
 // Variable for player color
 let myColor = null;
 
+// Player character sprites
+let characterSprites = [];
+const characterFiles = [
+    'npc_knight_blue.png',
+    'npc_knight_yellow.png',
+    'npc_knight_green.png',
+    'npc_mage.png',
+    'npc_sage.png',
+    'npc_merchant.png',
+    'npc_merchant_2.png',
+    'npc_wrestler.png',
+    'monster_dark_knight.png',
+    'monster_orc_armored.png',
+    'monster_skelet.png',
+    'monster_zombie_small.png',
+    'monster_imp.png',
+    'monster_bies.png',
+    'monster_rokita.png',
+    'monster_demonolog.png',
+    'monster_necromancer.png',
+    'monster_tentackle.png',
+    'monster_elemental_fire_small.png',
+    'monster_elemental_air_small.png'
+];
+
+// Map player IDs to character indices
+let playerCharacterMap = new Map();
+let nextCharacterIndex = 0;
+
+// Wall sprites
+let boxSprite = null; // Destructible wall
+let wallCenterSprite = null; // Indestructible wall
+let bombSprite = null; // Bomb
+
 const serverMoveInterval = 150; // Matches server's moveInterval
+
+function preload() {
+    // Load all character sprites
+    for (let i = 0; i < characterFiles.length; i++) {
+        characterSprites[i] = loadImage('bomberman-assets/characters/' + characterFiles[i]);
+    }
+
+    // Load wall and bomb sprites
+    boxSprite = loadImage('bomberman-assets/box.png');
+    wallCenterSprite = loadImage('bomberman-assets/wall_center.png');
+    bombSprite = loadImage('bomberman-assets/weapon_bomb.png');
+}
 
 function setup() {
     const canvas = createCanvas(960, 800); // 20% wider
@@ -161,6 +207,7 @@ function setup() {
 
     socket.on('playerLeft', (id) => {
         players.delete(id);
+        playerCharacterMap.delete(id);
     });
 
     socket.on('playerJoined', (data) => {
@@ -294,25 +341,39 @@ function drawGrid() {
 }
 
 function drawWalls() {
-    // Draw indestructible walls (dark gray)
-    fill(80, 80, 80);
-    noStroke();
-    indestructibleWalls.forEach(wall => {
-        rect(wall.x, wall.y, scl, scl);
-    });
+    // Draw indestructible walls
+    if (wallCenterSprite) {
+        indestructibleWalls.forEach(wall => {
+            image(wallCenterSprite, wall.x, wall.y, scl, scl);
+        });
+    } else {
+        // Fallback: Draw as dark gray
+        fill(80, 80, 80);
+        noStroke();
+        indestructibleWalls.forEach(wall => {
+            rect(wall.x, wall.y, scl, scl);
+        });
+    }
 
-    // Draw destructible walls (brown)
-    fill(139, 90, 43);
-    noStroke();
-    destructibleWalls.forEach(wall => {
-        rect(wall.x, wall.y, scl, scl);
+    // Draw destructible walls
+    if (boxSprite) {
+        destructibleWalls.forEach(wall => {
+            image(boxSprite, wall.x, wall.y, scl, scl);
+        });
+    } else {
+        // Fallback: Draw as brown
+        fill(139, 90, 43);
+        noStroke();
+        destructibleWalls.forEach(wall => {
+            rect(wall.x, wall.y, scl, scl);
 
-        // Add texture lines
-        stroke(100, 60, 30);
-        strokeWeight(2);
-        line(wall.x, wall.y + scl/3, wall.x + scl, wall.y + scl/3);
-        line(wall.x, wall.y + 2*scl/3, wall.x + scl, wall.y + 2*scl/3);
-    });
+            // Add texture lines
+            stroke(100, 60, 30);
+            strokeWeight(2);
+            line(wall.x, wall.y + scl/3, wall.x + scl, wall.y + scl/3);
+            line(wall.x, wall.y + 2*scl/3, wall.x + scl, wall.y + 2*scl/3);
+        });
+    }
 }
 
 function drawBombPickups() {
@@ -372,12 +433,18 @@ function drawPowerups() {
 }
 
 function drawBombs() {
-    bombs.forEach(bomb => {
-        // Draw bomb as black circle
-        fill(0);
-        noStroke();
-        ellipse(bomb.x + scl/2, bomb.y + scl/2, scl * 0.7, scl * 0.7);
-    });
+    if (bombSprite) {
+        bombs.forEach(bomb => {
+            image(bombSprite, bomb.x, bomb.y, scl, scl);
+        });
+    } else {
+        // Fallback: Draw as black circle
+        bombs.forEach(bomb => {
+            fill(0);
+            noStroke();
+            ellipse(bomb.x + scl/2, bomb.y + scl/2, scl * 0.7, scl * 0.7);
+        });
+    }
 }
 
 function drawExplosions() {
@@ -396,6 +463,12 @@ function drawPlayers() {
     players.forEach((player, id) => {
         if (!player || !player.alive || !player.color) return;
 
+        // Assign character sprite to new players
+        if (!playerCharacterMap.has(id)) {
+            playerCharacterMap.set(id, nextCharacterIndex % characterSprites.length);
+            nextCharacterIndex++;
+        }
+
         // Calculate smooth interpolation from start to target position
         const elapsed = now - player.moveStartTime;
         const t = Math.min(elapsed / animationDuration, 1.0); // Clamp to 1.0
@@ -407,15 +480,24 @@ function drawPlayers() {
         player.renderX = lerp(player.startX || player.targetX, player.targetX, eased);
         player.renderY = lerp(player.startY || player.targetY, player.targetY, eased);
 
-        // Draw player as a colored square using interpolated coordinates
-        fill(player.color);
-        noStroke();
-        rect(player.renderX, player.renderY, scl, scl);
+        // Get the character sprite for this player
+        const characterIndex = playerCharacterMap.get(id);
+        const sprite = characterSprites[characterIndex];
 
-        // Draw a face or indicator
-        fill(255);
-        ellipse(player.renderX + scl * 0.35, player.renderY + scl * 0.35, scl * 0.15, scl * 0.15);
-        ellipse(player.renderX + scl * 0.65, player.renderY + scl * 0.35, scl * 0.15, scl * 0.15);
+        if (sprite) {
+            // Draw character sprite (16x16 scaled to 32x32)
+            image(sprite, player.renderX, player.renderY, scl, scl);
+        } else {
+            // Fallback: Draw player as a colored square
+            fill(player.color);
+            noStroke();
+            rect(player.renderX, player.renderY, scl, scl);
+
+            // Draw a face or indicator
+            fill(255);
+            ellipse(player.renderX + scl * 0.35, player.renderY + scl * 0.35, scl * 0.15, scl * 0.15);
+            ellipse(player.renderX + scl * 0.65, player.renderY + scl * 0.35, scl * 0.15, scl * 0.15);
+        }
     });
 }
 
