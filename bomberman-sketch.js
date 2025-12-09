@@ -51,7 +51,7 @@ let boxSprite = null; // Destructible wall
 let wallCenterSprite = null; // Indestructible wall
 let bombSprite = null; // Bomb
 
-const serverMoveInterval = 150; // Matches server's moveInterval
+const serverMoveInterval = 195; // Matches server's moveInterval (30% slower)
 
 function preload() {
     // Load all character sprites
@@ -456,6 +456,30 @@ function drawExplosions() {
     });
 }
 
+function updateAvatarDisplay() {
+    // Update the avatar display canvas with the player's character
+    if (!playerId || !playerCharacterMap.has(playerId)) return;
+
+    const characterIndex = playerCharacterMap.get(playerId);
+    const sprite = characterSprites[characterIndex];
+
+    if (!sprite) return;
+
+    const avatarCanvas = document.getElementById('avatar-display');
+    const yourColorDiv = document.getElementById('your-color');
+
+    if (avatarCanvas && yourColorDiv) {
+        const ctx = avatarCanvas.getContext('2d');
+        // Clear the canvas
+        ctx.clearRect(0, 0, avatarCanvas.width, avatarCanvas.height);
+        // Draw the character sprite scaled to 64x64
+        ctx.imageSmoothingEnabled = false; // Pixelated rendering
+        ctx.drawImage(sprite.canvas, 0, 0, 64, 64);
+        // Show the avatar display
+        yourColorDiv.style.display = 'block';
+    }
+}
+
 function drawPlayers() {
     const now = Date.now();
     const animationDuration = serverMoveInterval; // Match server's move interval (150ms)
@@ -467,6 +491,11 @@ function drawPlayers() {
         if (!playerCharacterMap.has(id)) {
             playerCharacterMap.set(id, nextCharacterIndex % characterSprites.length);
             nextCharacterIndex++;
+
+            // Update avatar display if this is the local player
+            if (id === playerId) {
+                updateAvatarDisplay();
+            }
         }
 
         // Calculate smooth interpolation from start to target position

@@ -25,7 +25,7 @@ class BombermanGame {
             cols: 32,
             rows: 27,
             updateInterval: 100, // ms per game update tick
-            moveInterval: 150, // ms between player moves
+            moveInterval: 195, // ms between player moves (30% slower than original 150ms)
             usedColors: new Set(),
             winnerId: null,
             bombPickupSpawnRate: 0.02, // Chance per update to spawn a pickup
