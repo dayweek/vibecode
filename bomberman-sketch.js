@@ -13,6 +13,12 @@ let winDelaySeconds = 3;
 let keysPressed = {}; // Track which keys are currently pressed
 let directionKeys = []; // Track order of pressed direction keys
 
+// New variables for displaying player color
+let myColor = null;
+let displayColorMessage = false; // Flag to control display
+
+const serverMoveInterval = 150; // Matches server's moveInterval
+
 function setup() {
     const canvas = createCanvas(960, 800); // 20% wider
     canvas.parent('game-container');
@@ -23,12 +29,28 @@ function setup() {
 
     socket.on('connect', () => {
         console.log('Connected to Bomberman server');
+        // Reset message display when reconnecting
+        myColor = null;
+        displayColorMessage = false;
+    });
+
+    // Listen for player color assignment *before* init/gameState
+    socket.on('playerColor', (color) => {
+        myColor = color;
+        displayColorMessage = true;
+        console.log(`Your color is: ${myColor}`);
     });
 
     socket.on('init', (data) => {
         playerId = data.playerId;
         // Initialize all players
         data.gameState.players.forEach(player => {
+            // Initialize smooth animation properties
+            player.renderX = player.x;
+            player.renderY = player.y;
+            player.targetX = player.x;
+            player.targetY = player.y;
+            player.moveStartTime = Date.now();
             players.set(player.id, player);
         });
         bombPickups = data.gameState.bombPickups || [];
@@ -43,14 +65,64 @@ function setup() {
                 resizeCanvas(data.gameState.width, data.gameState.height);
             }
         }
+
+        // Once init is received, we can stop displaying the color message
+        displayColorMessage = false;
     });
 
     socket.on('gameState', (state) => {
         // Update all players
-        players.clear();
-        state.players.forEach(player => {
-            players.set(player.id, player);
+        const currentIds = new Set();
+        state.players.forEach(serverPlayer => {
+            currentIds.add(serverPlayer.id);
+            if (players.has(serverPlayer.id)) {
+                // Update existing player
+                const localPlayer = players.get(serverPlayer.id);
+
+                // Initialize animation properties if needed
+                if (localPlayer.renderX === undefined) {
+                    localPlayer.renderX = serverPlayer.x;
+                    localPlayer.renderY = serverPlayer.y;
+                }
+
+                // Check if position changed (player moved to new tile)
+                if (localPlayer.targetX !== serverPlayer.x || localPlayer.targetY !== serverPlayer.y) {
+                    // Set current render position as starting point
+                    localPlayer.startX = localPlayer.renderX;
+                    localPlayer.startY = localPlayer.renderY;
+                    // Set new target
+                    localPlayer.targetX = serverPlayer.x;
+                    localPlayer.targetY = serverPlayer.y;
+                    localPlayer.moveStartTime = Date.now();
+                }
+
+                // Update other properties
+                localPlayer.color = serverPlayer.color;
+                localPlayer.alive = serverPlayer.alive;
+                localPlayer.activeBombs = serverPlayer.activeBombs;
+                localPlayer.maxBombs = serverPlayer.maxBombs;
+                localPlayer.isMoving = serverPlayer.isMoving;
+
+            } else {
+                // New player
+                serverPlayer.renderX = serverPlayer.x;
+                serverPlayer.renderY = serverPlayer.y;
+                serverPlayer.targetX = serverPlayer.x;
+                serverPlayer.targetY = serverPlayer.y;
+                serverPlayer.startX = serverPlayer.x;
+                serverPlayer.startY = serverPlayer.y;
+                serverPlayer.moveStartTime = Date.now();
+                players.set(serverPlayer.id, serverPlayer);
+            }
         });
+
+        // Remove disconnected players
+        for (const [id] of players) {
+            if (!currentIds.has(id)) {
+                players.delete(id);
+            }
+        }
+
         bombPickups = state.bombPickups || [];
         bombs = state.bombs || [];
         explosions = state.explosions || [];
@@ -75,6 +147,9 @@ function setup() {
         }
 
         winnerId = state.winnerId;
+
+        // Once game state is received, we can stop displaying the color message
+        displayColorMessage = false;
     });
 
     socket.on('playerLeft', (id) => {
@@ -83,18 +158,26 @@ function setup() {
 
     socket.on('playerJoined', (data) => {
         if (data.playerId !== playerId) {
+            // Initialize smooth animation properties
+            data.playerData.renderX = data.playerData.x;
+            data.playerData.renderY = data.playerData.y;
+            data.playerData.targetX = data.playerData.x;
+            data.playerData.targetY = data.playerData.y;
+            data.playerData.startX = data.playerData.x;
+            data.playerData.startY = data.playerData.y;
+            data.playerData.moveStartTime = Date.now();
             players.set(data.playerId, data.playerData);
         }
     });
 
     // Sound effect listeners
-    socket.on('playEatSound', () => {
-        const eatSound = document.getElementById('eatSound');
-        if (eatSound) {
-            eatSound.currentTime = 0;
-            eatSound.play().catch(e => console.error("Error playing eat sound:", e));
-        }
-    });
+    // socket.on('playEatSound', () => {
+    //     const eatSound = document.getElementById('eatSound');
+    //     if (eatSound) {
+    //         eatSound.currentTime = 0;
+    //         eatSound.play().catch(e => console.error("Error playing eat sound:", e));
+    //     }
+    // });
 
     socket.on('playDieSound', () => {
         const dieSound = document.getElementById('dieSound');
@@ -104,13 +187,13 @@ function setup() {
         }
     });
 
-    socket.on('playNewSound', () => {
-        const newSound = document.getElementById('newSound');
-        if (newSound) {
-            newSound.currentTime = 0;
-            newSound.play().catch(e => console.error("Error playing new sound:", e));
-        }
-    });
+    // socket.on('playNewSound', () => {
+    //     const newSound = document.getElementById('newSound');
+    //     if (newSound) {
+    //         newSound.currentTime = 0;
+    //         newSound.play().catch(e => console.error("Error playing new sound:", e));
+    //     }
+    // });
 
     socket.on('playWinSound', () => {
         const winSound = document.getElementById('winSound');
@@ -135,20 +218,20 @@ function setup() {
     const backgroundMusic = document.getElementById('backgroundMusic');
 
     if (toggleMusicButton && backgroundMusic) {
-        let isMusicPlaying = true;
+        let isMusicPlaying = false; // Music off by default
+        toggleMusicButton.textContent = 'Play Music';
 
-        backgroundMusic.play().catch(error => {
-            console.error("Initial music play failed:", error);
-            isMusicPlaying = false;
-        });
+        // No initial play, music starts paused
 
         toggleMusicButton.addEventListener('click', () => {
             if (isMusicPlaying) {
                 backgroundMusic.pause();
+                toggleMusicButton.textContent = 'Play Music';
             } else {
                 backgroundMusic.play().catch(error => {
                     console.error("Error playing music:", error);
                 });
+                toggleMusicButton.textContent = 'Pause Music';
             }
             isMusicPlaying = !isMusicPlaying;
         });
@@ -183,6 +266,29 @@ function draw() {
     if (winnerId) {
         drawWinnerMessage();
     }
+
+    // Draw player color message if active
+    if (displayColorMessage && myColor) {
+        drawPlayerColorMessage();
+    }
+}
+
+// New function to draw the player color message
+function drawPlayerColorMessage() {
+    fill(0, 0, 0, 180); // Semi-transparent black background
+    rect(0, height / 2 - 60, width, 120);
+
+    fill(255);
+    textSize(36);
+    textAlign(CENTER, CENTER);
+    text('Your Color is:', width / 2, height / 2 - 20);
+
+    fill(myColor); // Use the assigned color
+    textSize(48);
+    text('█', width / 2, height / 2 + 30); // Display a colored square
+    textSize(24);
+    fill(255);
+    text(myColor.toUpperCase(), width / 2, height / 2 + 30 + 40); // Display hex code as well
 }
 
 function drawGrid() {
@@ -258,18 +364,32 @@ function drawExplosions() {
 }
 
 function drawPlayers() {
-    players.forEach((player, id) => {
-        if (player && player.x !== undefined && player.y !== undefined && player.color && player.alive) {
-            // Draw player as a colored square
-            fill(player.color);
-            noStroke();
-            rect(player.x, player.y, scl, scl);
+    const now = Date.now();
+    const animationDuration = serverMoveInterval; // Match server's move interval (150ms)
 
-            // Draw a face or indicator
-            fill(255);
-            ellipse(player.x + scl * 0.35, player.y + scl * 0.35, scl * 0.15, scl * 0.15);
-            ellipse(player.x + scl * 0.65, player.y + scl * 0.35, scl * 0.15, scl * 0.15);
-        }
+    players.forEach((player, id) => {
+        if (!player || !player.alive || !player.color) return;
+
+        // Calculate smooth interpolation from start to target position
+        const elapsed = now - player.moveStartTime;
+        const t = Math.min(elapsed / animationDuration, 1.0); // Clamp to 1.0
+
+        // Use easeOutCubic for smooth deceleration
+        const eased = 1 - Math.pow(1 - t, 3);
+
+        // Interpolate between start and target
+        player.renderX = lerp(player.startX || player.targetX, player.targetX, eased);
+        player.renderY = lerp(player.startY || player.targetY, player.targetY, eased);
+
+        // Draw player as a colored square using interpolated coordinates
+        fill(player.color);
+        noStroke();
+        rect(player.renderX, player.renderY, scl, scl);
+
+        // Draw a face or indicator
+        fill(255);
+        ellipse(player.renderX + scl * 0.35, player.renderY + scl * 0.35, scl * 0.15, scl * 0.15);
+        ellipse(player.renderX + scl * 0.65, player.renderY + scl * 0.35, scl * 0.15, scl * 0.15);
     });
 }
 

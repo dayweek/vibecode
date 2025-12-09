@@ -24,7 +24,7 @@ class BombermanGame {
             cols: 32,
             rows: 27,
             updateInterval: 100, // ms per game update tick
-            moveInterval: 300, // ms between player moves
+            moveInterval: 150, // ms between player moves
             usedColors: new Set(),
             winnerId: null,
             bombPickupSpawnRate: 0.02, // Chance per update to spawn a pickup
@@ -37,6 +37,8 @@ class BombermanGame {
             maxPlayers: 20 // Maximum expected players for full-size grid
         };
 
+        // Initialize grid size based on initial player count (0 at this point)
+        this.updateGridSize();
         this.generateEnvironment();
         this.spawnInitialBombPickups();
         this.setupNamespace();
@@ -86,6 +88,7 @@ class BombermanGame {
                 const pos = this.getRandomEmptyPosition();
                 player.x = pos.x;
                 player.y = pos.y;
+                player.activeBombs = 0; // Reset active bombs since we cleared them
             });
 
             // Clear bombs and pickups
@@ -353,8 +356,17 @@ class BombermanGame {
                     }
 
                     // Check collision with bombs
-                    if (!collision && this.gameState.bombs.some(b => b.x === newX && b.y === newY)) {
-                        collision = true;
+                    // Solid Bomb Rule: Can walk off a bomb, but cannot walk onto it
+                    if (!collision) {
+                        const bombAtTarget = this.gameState.bombs.find(b => b.x === newX && b.y === newY);
+                        if (bombAtTarget) {
+                            // There is a bomb at the target tile.
+                            // Only allow movement if the player is currently standing on that same bomb (walking off it).
+                            // If the player is NOT currently on that bomb, it's a collision (blocked).
+                            if (player.x !== bombAtTarget.x || player.y !== bombAtTarget.y) {
+                                collision = true;
+                            }
+                        }
                     }
 
                     if (!collision) {
@@ -530,7 +542,9 @@ class BombermanGame {
                 color: player.color,
                 maxBombs: player.maxBombs,
                 activeBombs: player.activeBombs,
-                alive: player.alive
+                alive: player.alive,
+                lastMoveTime: player.lastMoveTime, // Add this for client-side animation
+                isMoving: !!player.currentDirection // Send moving state for easing
             })),
             bombPickups: this.gameState.bombPickups,
             bombs: this.gameState.bombs.map(bomb => ({
@@ -562,11 +576,11 @@ class BombermanGame {
             this.gameState.players.delete(playerId);
             this.io.of('/bomberman').emit('playerLeft', playerId);
 
-            // Check if grid needs to be resized after player leaves
-            const gridResized = this.updateGridSize();
-            if (gridResized) {
-                this.broadcastGameState();
-            }
+            // Removed: Dynamic grid resizing on player disconnect
+            // const gridResized = this.updateGridSize();
+            // if (gridResized) {
+            //     this.broadcastGameState();
+            // }
         }
     }
 
@@ -603,6 +617,9 @@ class BombermanGame {
             const color = this.getAvailableColor();
             this.gameState.usedColors.add(color);
 
+            // Send the assigned color to the player immediately
+            socket.emit('playerColor', color);
+
             const pos = this.getRandomEmptyPosition();
 
             const newPlayer = {
@@ -619,8 +636,8 @@ class BombermanGame {
 
             this.gameState.players.set(socket.id, newPlayer);
 
-            // Check if grid needs to be resized
-            const gridResized = this.updateGridSize();
+            // Removed: Dynamic grid resizing on player join
+            // const gridResized = this.updateGridSize();
 
             // Send initial game state
             socket.emit('init', {
@@ -652,10 +669,10 @@ class BombermanGame {
             });
             bombermanNamespace.emit('playNewSound');
 
-            // If grid was resized, broadcast new state to all players
-            if (gridResized) {
-                this.broadcastGameState();
-            }
+            // Removed: Dynamic grid resizing on player join
+            // if (gridResized) {
+            //     this.broadcastGameState();
+            // }
 
             // Handle movement start
             socket.on('moveStart', (direction) => {
@@ -718,7 +735,8 @@ class BombermanGame {
                     }
                 });
 
-                // Regenerate environment
+                // Update grid size and then regenerate environment
+                this.updateGridSize();
                 this.generateEnvironment();
 
                 // Reset the initiator
@@ -752,7 +770,8 @@ class BombermanGame {
                 if (this.gameState.winnerId) {
                     console.log(`Bomberman restart requested by ${socket.id}`);
 
-                    // Regenerate environment
+                    // Update grid size and then regenerate environment
+                    this.updateGridSize();
                     this.generateEnvironment();
 
                     this.gameState.winnerId = null;
