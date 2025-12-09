@@ -2,6 +2,7 @@ const express = require('express');
 const http = require('http');
 const socketIO = require('socket.io');
 const path = require('path');
+const BombermanGame = require('./bomberman-server');
 
 const app = express();
 const server = http.createServer(app);
@@ -117,35 +118,21 @@ function updateGameState() {
             }
 
             // Calculate new head position (one grid cell)
-            const newHeadX = player.segments[0].x + player.direction.x * gameState.scale;
-            const newHeadY = player.segments[0].y + player.direction.y * gameState.scale;
-            
-            // Store the position of the last segment *before* moving
-            const tailPosition = { ...player.segments[player.segments.length - 1] };
+            let newHeadX = player.segments[0].x + player.direction.x * gameState.scale;
+            let newHeadY = player.segments[0].y + player.direction.y * gameState.scale;
+
+            // Wrap around the screen for new head position
+            if (newHeadX >= gameState.width) newHeadX = 0;
+            if (newHeadX < 0) newHeadX = gameState.width - gameState.scale;
+            if (newHeadY >= gameState.height) newHeadY = 0;
+            if (newHeadY < 0) newHeadY = gameState.height - gameState.scale;
+
+            // Check for food collision at the new head position before moving
             let ateFood = false;
-
-            // Update tail segments (move each segment to the position of the one before it)
-            for (let i = player.segments.length - 1; i > 0; i--) {
-                player.segments[i] = { ...player.segments[i - 1] };
-            }
-
-            // Update head position
-            player.segments[0].x = newHeadX;
-            player.segments[0].y = newHeadY;
-
-            // Wrap around the screen
-            if (player.segments[0].x >= gameState.width) player.segments[0].x = 0;
-            if (player.segments[0].x < 0) player.segments[0].x = gameState.width - gameState.scale;
-            if (player.segments[0].y >= gameState.height) player.segments[0].y = 0;
-            if (player.segments[0].y < 0) player.segments[0].y = gameState.height - gameState.scale;
-
-            // Check for food collision
             gameState.food.forEach((food, index) => {
-                if (player.segments[0].x === food.x && player.segments[0].y === food.y) {
-                    // Add new segment using the stored tail position
-                    player.segments.push(tailPosition);
-                    player.score++;
+                if (newHeadX === food.x && newHeadY === food.y) {
                     ateFood = true;
+                    player.score++;
 
                     // Emit sound effect event to the player
                     const playerSocket = io.sockets.sockets.get(playerId);
@@ -166,6 +153,31 @@ function updateGameState() {
                     }
                 }
             });
+
+            // Move the snake: if food was eaten, grow by keeping tail; otherwise move normally
+            if (ateFood) {
+                // When growing: move all segments normally, then add the old tail back
+                const tailPosition = { ...player.segments[player.segments.length - 1] };
+                
+                // Move each segment to the position of the one before it
+                for (let i = player.segments.length - 1; i > 0; i--) {
+                    player.segments[i] = { ...player.segments[i - 1] };
+                }
+                // Update head position
+                player.segments[0].x = newHeadX;
+                player.segments[0].y = newHeadY;
+                
+                // Add back the tail segment to grow the snake
+                player.segments.push(tailPosition);
+            } else {
+                // Normal movement: move each segment to the position of the one before it
+                for (let i = player.segments.length - 1; i > 0; i--) {
+                    player.segments[i] = { ...player.segments[i - 1] };
+                }
+                // Update head position
+                player.segments[0].x = newHeadX;
+                player.segments[0].y = newHeadY;
+            }
 
             // Check for collisions with other snakes (and self)
             let collisionDetected = false;
@@ -374,7 +386,12 @@ io.on('connection', (socket) => {
     });
 });
 
+// Initialize Bomberman game (uses /bomberman namespace)
+const bombermanGame = new BombermanGame(io);
+
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
     console.log(`Server is running on port ${PORT}`);
+    console.log(`Snake game available at http://localhost:${PORT}/`);
+    console.log(`Bomberman game available at http://localhost:${PORT}/bomberman.html`);
 }); 

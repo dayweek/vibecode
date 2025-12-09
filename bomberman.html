@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Multiplayer Bomberman Game</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/0.5.7/p5.js"></script>
+    <script src="/socket.io/socket.io.js"></script>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            background-color: #1a1a1a;
+            color: white;
+            font-family: Arial, sans-serif;
+            overflow: hidden; /* Disable scrolling */
+            position: fixed;
+            width: 100%;
+            height: 100%;
+        }
+        #game-container {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+        canvas {
+            border: 2px solid #333;
+            margin-bottom: 10px;
+        }
+        #controls {
+            display: flex;
+            gap: 10px;
+        }
+        button {
+            padding: 10px 20px;
+            font-size: 16px;
+            cursor: pointer;
+            background-color: #444;
+            color: white;
+            border: 2px solid #666;
+            border-radius: 5px;
+        }
+        button:hover {
+            background-color: #555;
+        }
+    </style>
+</head>
+<body>
+    <div id="game-container">
+        <div id="controls">
+            <button id="resetButton">Reset Game</button>
+            <button id="toggleMusicButton">Pause Music</button>
+        </div>
+    </div>
+
+    <audio id="backgroundMusic" src="Pixelated Love.mp3" loop></audio>
+    <audio id="eatSound" src="eat.mp3"></audio>
+    <audio id="dieSound" src="die.mp3"></audio>
+    <audio id="newSound" src="new.mp3"></audio>
+    <audio id="winSound" src="win.mp3"></audio>
+
+    <script src="bomberman-sketch.js"></script>
+</body>
+</html>
