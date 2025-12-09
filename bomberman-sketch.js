@@ -13,9 +13,8 @@ let winDelaySeconds = 3;
 let keysPressed = {}; // Track which keys are currently pressed
 let directionKeys = []; // Track order of pressed direction keys
 
-// New variables for displaying player color
+// Variable for player color
 let myColor = null;
-let displayColorMessage = false; // Flag to control display
 
 const serverMoveInterval = 150; // Matches server's moveInterval
 
@@ -29,16 +28,24 @@ function setup() {
 
     socket.on('connect', () => {
         console.log('Connected to Bomberman server');
-        // Reset message display when reconnecting
         myColor = null;
-        displayColorMessage = false;
+        // Hide color display on reconnect
+        const yourColorDiv = document.getElementById('your-color');
+        if (yourColorDiv) yourColorDiv.style.display = 'none';
     });
 
-    // Listen for player color assignment *before* init/gameState
+    // Listen for player color assignment
     socket.on('playerColor', (color) => {
         myColor = color;
-        displayColorMessage = true;
         console.log(`Your color is: ${myColor}`);
+
+        // Update the color display in the left panel
+        const colorDisplay = document.getElementById('color-display');
+        const yourColorDiv = document.getElementById('your-color');
+        if (colorDisplay && yourColorDiv) {
+            colorDisplay.style.backgroundColor = color;
+            yourColorDiv.style.display = 'block';
+        }
     });
 
     socket.on('init', (data) => {
@@ -65,9 +72,6 @@ function setup() {
                 resizeCanvas(data.gameState.width, data.gameState.height);
             }
         }
-
-        // Once init is received, we can stop displaying the color message
-        displayColorMessage = false;
     });
 
     socket.on('gameState', (state) => {
@@ -147,9 +151,6 @@ function setup() {
         }
 
         winnerId = state.winnerId;
-
-        // Once game state is received, we can stop displaying the color message
-        displayColorMessage = false;
     });
 
     socket.on('playerLeft', (id) => {
@@ -266,29 +267,6 @@ function draw() {
     if (winnerId) {
         drawWinnerMessage();
     }
-
-    // Draw player color message if active
-    if (displayColorMessage && myColor) {
-        drawPlayerColorMessage();
-    }
-}
-
-// New function to draw the player color message
-function drawPlayerColorMessage() {
-    fill(0, 0, 0, 180); // Semi-transparent black background
-    rect(0, height / 2 - 60, width, 120);
-
-    fill(255);
-    textSize(36);
-    textAlign(CENTER, CENTER);
-    text('Your Color is:', width / 2, height / 2 - 20);
-
-    fill(myColor); // Use the assigned color
-    textSize(48);
-    text('█', width / 2, height / 2 + 30); // Display a colored square
-    textSize(24);
-    fill(255);
-    text(myColor.toUpperCase(), width / 2, height / 2 + 30 + 40); // Display hex code as well
 }
 
 function drawGrid() {

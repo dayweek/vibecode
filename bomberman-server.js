@@ -186,6 +186,9 @@ class BombermanGame {
                 // Skip safe zones
                 if (isInSafeZone(col, row)) continue;
 
+                // Skip outer perimeter (edges) - don't place destructible walls on borders
+                if (row === 0 || row === rows - 1 || col === 0 || col === cols - 1) continue;
+
                 // Skip if there's already an indestructible wall
                 const hasIndestructible = this.gameState.indestructibleWalls.some(
                     w => w.x === col * scale && w.y === row * scale
@@ -307,8 +310,8 @@ class BombermanGame {
             const timeElapsed = now - bomb.placedTime;
 
             if (timeElapsed >= this.gameState.bombFuseTime) {
-                // Bomb explodes
-                this.createExplosion(bomb.x, bomb.y);
+                // Bomb explodes - pass the playerId who placed it
+                this.createExplosion(bomb.x, bomb.y, bomb.playerId);
 
                 // Decrement activeBombs for the player who placed it
                 const player = this.gameState.players.get(bomb.playerId);
@@ -399,9 +402,9 @@ class BombermanGame {
                 if (player.alive && player.x === explosion.x && player.y === explosion.y) {
                     player.alive = false;
 
-                    // Emit death sound
-                    const playerSocket = this.io.of('/bomberman').sockets.get(playerId);
-                    if (playerSocket) playerSocket.emit('playDieSound');
+                    // Emit death sound (disabled)
+                    // const playerSocket = this.io.of('/bomberman').sockets.get(playerId);
+                    // if (playerSocket) playerSocket.emit('playDieSound');
                 }
             });
         });
@@ -419,13 +422,13 @@ class BombermanGame {
         }
     }
 
-    createExplosion(centerX, centerY) {
+    createExplosion(centerX, centerY, sourceBombPlayerId = null) {
         const explosionTiles = [];
         const scale = this.gameState.scale;
         const bombsToChainExplode = []; // Track bombs hit by this explosion
 
         // Center tile always explodes
-        explosionTiles.push({ x: centerX, y: centerY });
+        explosionTiles.push({ x: centerX, y: centerY, sourceBombPlayerId });
 
         // Check if center destroys a destructible wall
         this.checkAndDestroyWall(centerX, centerY);
@@ -448,31 +451,42 @@ class BombermanGame {
                     break; // Stop this direction
                 }
 
-                // Check for indestructible wall - explosion stops
+                // Check for indestructible wall - explosion stops BEFORE this tile
                 const hasIndestructible = this.gameState.indestructibleWalls.some(
                     w => w.x === x && w.y === y
                 );
                 if (hasIndestructible) {
+                    // Don't add explosion on indestructible wall
                     break; // Stop this direction
                 }
 
-                // Check for destructible wall
+                // Check for destructible wall - explosion destroys it but stops
                 const destructibleIndex = this.gameState.destructibleWalls.findIndex(
                     w => w.x === x && w.y === y
                 );
 
                 if (destructibleIndex !== -1) {
-                    // Add explosion at this tile
-                    explosionTiles.push({ x, y });
+                    // Add explosion ONLY on the wall tile
+                    explosionTiles.push({ x, y, sourceBombPlayerId });
 
                     // Destroy the wall and drop bomb if it has one
                     this.checkAndDestroyWall(x, y);
 
-                    break; // Stop this direction after hitting destructible wall
+                    // STOP - explosion does NOT continue past this wall
+                    break;
                 }
 
-                // No wall, explosion continues
-                explosionTiles.push({ x, y });
+                // No wall at this position - explosion continues
+                // Double-check no wall exists before adding explosion
+                const noWallHere = !this.gameState.indestructibleWalls.some(w => w.x === x && w.y === y) &&
+                                   !this.gameState.destructibleWalls.some(w => w.x === x && w.y === y);
+
+                if (noWallHere) {
+                    explosionTiles.push({ x, y, sourceBombPlayerId });
+                } else {
+                    // Safety: if wall found, stop immediately
+                    break;
+                }
             }
         });
 
@@ -482,7 +496,8 @@ class BombermanGame {
             this.gameState.explosions.push({
                 x: tile.x,
                 y: tile.y,
-                createdTime: now
+                createdTime: now,
+                sourceBombPlayerId: tile.sourceBombPlayerId
             });
 
             // Check if there's a bomb at this explosion tile
@@ -510,7 +525,7 @@ class BombermanGame {
                 }
 
                 // Trigger explosion at bomb location (chain reaction)
-                this.createExplosion(bomb.x, bomb.y);
+                this.createExplosion(bomb.x, bomb.y, bomb.playerId);
             }
         });
     }
@@ -631,7 +646,8 @@ class BombermanGame {
                 alive: true,
                 lastMoveTime: Date.now(),
                 lastActivityTime: Date.now(),
-                currentDirection: null // Continuous movement direction
+                currentDirection: null, // Continuous movement direction
+                lastBombPlacedTime: 0 // Track when player last placed a bomb
             };
 
             this.gameState.players.set(socket.id, newPlayer);
@@ -714,6 +730,7 @@ class BombermanGame {
                         });
 
                         player.activeBombs++; // Increment active bomb count
+                        player.lastBombPlacedTime = Date.now(); // Track when bomb was placed
                     }
                 }
             });

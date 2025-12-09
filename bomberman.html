@@ -78,6 +78,15 @@
 <body>
     <div id="game-container">
         <div id="left-panel">
+            <div id="your-color" style="background-color: #2a2a2a; padding: 8px 10px; border-radius: 5px; border: 2px solid #333; margin-bottom: 15px; display: none;">
+                <h3 style="margin: 0 0 8px 0; font-size: 12px; font-weight: normal; color: #999;">Your color:</h3>
+                <div id="color-display" style="width: 30px; height: 30px; margin: 0 auto; border: 2px solid #666; border-radius: 3px; position: relative;">
+                    <div id="color-eyes" style="position: absolute; top: 10px; left: 50%; transform: translateX(-50%); width: 20px; display: flex; justify-content: space-between;">
+                        <div style="width: 4px; height: 4px; background: white; border-radius: 50%;"></div>
+                        <div style="width: 4px; height: 4px; background: white; border-radius: 50%;"></div>
+                    </div>
+                </div>
+            </div>
             <div id="controls">
                 <button id="resetButton">Reset</button>
                 <button id="toggleMusicButton">Music</button>
