@@ -305,13 +305,17 @@ class BombermanGame {
         // Pause game logic if there's a winner
         if (this.gameState.winnerId) return;
 
+        // Track walls to destroy in this tick (to handle simultaneous explosions correctly)
+        // Store as "x,y" strings
+        const wallsToDestroy = new Set();
+
         // Update bombs (check for explosions)
         this.gameState.bombs = this.gameState.bombs.filter(bomb => {
             const timeElapsed = now - bomb.placedTime;
 
             if (timeElapsed >= this.gameState.bombFuseTime) {
-                // Bomb explodes - pass the playerId who placed it
-                this.createExplosion(bomb.x, bomb.y, bomb.playerId);
+                // Bomb explodes - pass the playerId who placed it AND the walls set
+                this.createExplosion(bomb.x, bomb.y, wallsToDestroy);
 
                 // Decrement activeBombs for the player who placed it
                 const player = this.gameState.players.get(bomb.playerId);
@@ -324,6 +328,23 @@ class BombermanGame {
 
             return true; // Keep bomb
         });
+
+        // Process deferred wall destruction
+        if (wallsToDestroy.size > 0) {
+            // Filter out destroyed walls and spawn pickups
+            this.gameState.destructibleWalls = this.gameState.destructibleWalls.filter(wall => {
+                const key = `${wall.x},${wall.y}`;
+                if (wallsToDestroy.has(key)) {
+                    // This wall is destroyed
+                    // Drop bomb pickup if wall contained one
+                    if (wall.hasHiddenBomb) {
+                        this.gameState.bombPickups.push({ x: wall.x, y: wall.y });
+                    }
+                    return false; // Remove from array
+                }
+                return true; // Keep in array
+            });
+        }
 
         // Update explosions (remove expired ones)
         this.gameState.explosions = this.gameState.explosions.filter(explosion => {
@@ -422,16 +443,22 @@ class BombermanGame {
         }
     }
 
-    createExplosion(centerX, centerY, sourceBombPlayerId = null) {
+    createExplosion(centerX, centerY, wallsToDestroy) {
         const explosionTiles = [];
         const scale = this.gameState.scale;
         const bombsToChainExplode = []; // Track bombs hit by this explosion
 
         // Center tile always explodes
-        explosionTiles.push({ x: centerX, y: centerY, sourceBombPlayerId });
+        explosionTiles.push({ x: centerX, y: centerY });
 
         // Check if center destroys a destructible wall
-        this.checkAndDestroyWall(centerX, centerY);
+        // Use logic similar to checkAndDestroyWall but adding to Set
+        const centerWallIndex = this.gameState.destructibleWalls.findIndex(
+            w => w.x === centerX && w.y === centerY
+        );
+        if (centerWallIndex !== -1) {
+             wallsToDestroy.add(`${centerX},${centerY}`);
+        }
 
         // Cross pattern in 4 directions
         const directions = [
@@ -451,42 +478,31 @@ class BombermanGame {
                     break; // Stop this direction
                 }
 
-                // Check for indestructible wall - explosion stops BEFORE this tile
+                // Check for indestructible wall - explosion stops
                 const hasIndestructible = this.gameState.indestructibleWalls.some(
                     w => w.x === x && w.y === y
                 );
                 if (hasIndestructible) {
-                    // Don't add explosion on indestructible wall
                     break; // Stop this direction
                 }
 
-                // Check for destructible wall - explosion destroys it but stops
+                // Check for destructible wall
                 const destructibleIndex = this.gameState.destructibleWalls.findIndex(
                     w => w.x === x && w.y === y
                 );
 
                 if (destructibleIndex !== -1) {
-                    // Add explosion ONLY on the wall tile
-                    explosionTiles.push({ x, y, sourceBombPlayerId });
+                    // Add explosion at this tile
+                    explosionTiles.push({ x, y });
 
-                    // Destroy the wall and drop bomb if it has one
-                    this.checkAndDestroyWall(x, y);
+                    // Mark wall for destruction
+                    wallsToDestroy.add(`${x},${y}`);
 
-                    // STOP - explosion does NOT continue past this wall
-                    break;
+                    break; // Stop this direction after hitting destructible wall
                 }
 
-                // No wall at this position - explosion continues
-                // Double-check no wall exists before adding explosion
-                const noWallHere = !this.gameState.indestructibleWalls.some(w => w.x === x && w.y === y) &&
-                                   !this.gameState.destructibleWalls.some(w => w.x === x && w.y === y);
-
-                if (noWallHere) {
-                    explosionTiles.push({ x, y, sourceBombPlayerId });
-                } else {
-                    // Safety: if wall found, stop immediately
-                    break;
-                }
+                // No wall, explosion continues
+                explosionTiles.push({ x, y });
             }
         });
 
@@ -496,8 +512,7 @@ class BombermanGame {
             this.gameState.explosions.push({
                 x: tile.x,
                 y: tile.y,
-                createdTime: now,
-                sourceBombPlayerId: tile.sourceBombPlayerId
+                createdTime: now
             });
 
             // Check if there's a bomb at this explosion tile
@@ -525,27 +540,9 @@ class BombermanGame {
                 }
 
                 // Trigger explosion at bomb location (chain reaction)
-                this.createExplosion(bomb.x, bomb.y, bomb.playerId);
+                this.createExplosion(bomb.x, bomb.y, wallsToDestroy);
             }
         });
-    }
-
-    checkAndDestroyWall(x, y) {
-        const wallIndex = this.gameState.destructibleWalls.findIndex(
-            w => w.x === x && w.y === y
-        );
-
-        if (wallIndex !== -1) {
-            const wall = this.gameState.destructibleWalls[wallIndex];
-
-            // Remove the wall
-            this.gameState.destructibleWalls.splice(wallIndex, 1);
-
-            // Drop bomb pickup if wall contained one
-            if (wall.hasHiddenBomb) {
-                this.gameState.bombPickups.push({ x, y });
-            }
-        }
     }
 
     broadcastGameState() {
