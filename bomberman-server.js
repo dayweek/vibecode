@@ -35,7 +35,11 @@ class BombermanGame {
             baseExplosionRange: 1, // Base explosion range for new players
             destructibleWallDensity: 0.4, // 40% of non-indestructible tiles
             hiddenBombChance: 0.25, // 25% of destructible walls contain bombs
-            flamePowerupChance: 0.3, // 30% chance to spawn flame powerup when wall destroyed
+            flamePowerupChance: 0.25, // 25% chance to spawn flame powerup when wall destroyed
+            speedPowerupChance: 0.25, // 25% chance to spawn speed powerup when wall destroyed
+            invisibilityPowerupChance: 0.05, // 5% chance to spawn invisibility powerup (rare)
+            invisibilityDuration: 10000, // 10 seconds
+            maxSpeedBoosts: 5, // Maximum speed boosts a player can collect
             maxPlayers: 20 // Maximum expected players for full-size grid
         };
 
@@ -346,13 +350,28 @@ class BombermanGame {
                     if (wall.hasHiddenBomb) {
                         this.gameState.bombPickups.push({ x: wall.x, y: wall.y });
                     }
-                    // Random chance to spawn flame powerup
-                    else if (Math.random() < this.gameState.flamePowerupChance) {
-                        this.gameState.powerups.push({
-                            x: wall.x,
-                            y: wall.y,
-                            type: 'flame' // Increases bomb explosion range
-                        });
+                    // Random chance to spawn powerups (check in order: invisibility, flame, speed)
+                    else {
+                        const roll = Math.random();
+                        if (roll < this.gameState.invisibilityPowerupChance) {
+                            this.gameState.powerups.push({
+                                x: wall.x,
+                                y: wall.y,
+                                type: 'invisibility' // Makes player invisible for 10 seconds
+                            });
+                        } else if (roll < this.gameState.invisibilityPowerupChance + this.gameState.flamePowerupChance) {
+                            this.gameState.powerups.push({
+                                x: wall.x,
+                                y: wall.y,
+                                type: 'flame' // Increases bomb explosion range
+                            });
+                        } else if (roll < this.gameState.invisibilityPowerupChance + this.gameState.flamePowerupChance + this.gameState.speedPowerupChance) {
+                            this.gameState.powerups.push({
+                                x: wall.x,
+                                y: wall.y,
+                                type: 'speed' // Increases movement speed by 10%
+                            });
+                        }
                     }
                     return false; // Remove from array
                 }
@@ -370,9 +389,13 @@ class BombermanGame {
         this.gameState.players.forEach((player, playerId) => {
             if (!player.alive) return;
 
+            // Calculate move interval based on speed boosts (10% faster per boost)
+            const speedMultiplier = Math.pow(0.9, player.speedBoosts); // 0.9^speedBoosts
+            const playerMoveInterval = this.gameState.moveInterval * speedMultiplier;
+
             // Check if enough time has passed to move
             // Use currentDirection for continuous movement instead of pendingMove
-            if (player.currentDirection && now - player.lastMoveTime >= this.gameState.moveInterval) {
+            if (player.currentDirection && now - player.lastMoveTime >= playerMoveInterval) {
                 player.lastMoveTime = now;
 
                 const newX = player.x + player.currentDirection.x * this.gameState.scale;
@@ -434,6 +457,13 @@ class BombermanGame {
                             const powerup = this.gameState.powerups[powerupIndex];
                             if (powerup.type === 'flame') {
                                 player.bombRange++; // Increase bomb explosion range
+                            } else if (powerup.type === 'speed') {
+                                if (player.speedBoosts < this.gameState.maxSpeedBoosts) {
+                                    player.speedBoosts++; // Increase speed (max 5)
+                                }
+                            } else if (powerup.type === 'invisibility') {
+                                // Activate invisibility for 10 seconds
+                                player.invisibleUntil = Date.now() + this.gameState.invisibilityDuration;
                             }
                             this.gameState.powerups.splice(powerupIndex, 1);
 
@@ -580,40 +610,60 @@ class BombermanGame {
     }
 
     broadcastGameState() {
-        const state = {
-            players: Array.from(this.gameState.players.entries()).map(([id, player]) => ({
-                id,
-                x: player.x,
-                y: player.y,
-                color: player.color,
-                maxBombs: player.maxBombs,
-                activeBombs: player.activeBombs,
-                bombRange: player.bombRange,
-                alive: player.alive,
-                lastMoveTime: player.lastMoveTime, // Add this for client-side animation
-                isMoving: !!player.currentDirection // Send moving state for easing
-            })),
-            bombPickups: this.gameState.bombPickups,
-            powerups: this.gameState.powerups,
-            bombs: this.gameState.bombs.map(bomb => ({
-                x: bomb.x,
-                y: bomb.y,
-                placedTime: bomb.placedTime,
-                fuseTime: this.gameState.bombFuseTime
-            })),
-            explosions: this.gameState.explosions,
-            indestructibleWalls: this.gameState.indestructibleWalls,
-            destructibleWalls: this.gameState.destructibleWalls.map(w => ({
-                x: w.x,
-                y: w.y
-            })), // Don't send hasHiddenBomb to clients
-            winnerId: this.gameState.winnerId,
-            width: this.gameState.width,
-            height: this.gameState.height,
-            timestamp: Date.now()
-        };
+        const now = Date.now();
 
-        this.io.of('/bomberman').emit('gameState', state);
+        // Send customized state to each player (for invisibility)
+        this.gameState.players.forEach((_, socketId) => {
+            const socket = this.io.of('/bomberman').sockets.get(socketId);
+            if (!socket) return;
+
+            // Filter players: show all players except invisible ones (unless it's the invisible player viewing)
+            const visiblePlayers = Array.from(this.gameState.players.entries())
+                .filter(([id, p]) => {
+                    // Always show yourself
+                    if (id === socketId) return true;
+                    // Show others only if they're not invisible
+                    return !p.invisibleUntil || p.invisibleUntil <= now;
+                })
+                .map(([id, p]) => ({
+                    id,
+                    x: p.x,
+                    y: p.y,
+                    color: p.color,
+                    maxBombs: p.maxBombs,
+                    activeBombs: p.activeBombs,
+                    bombRange: p.bombRange,
+                    speedBoosts: p.speedBoosts,
+                    invisibleUntil: p.invisibleUntil,
+                    alive: p.alive,
+                    lastMoveTime: p.lastMoveTime,
+                    isMoving: !!p.currentDirection
+                }));
+
+            const state = {
+                players: visiblePlayers,
+                bombPickups: this.gameState.bombPickups,
+                powerups: this.gameState.powerups,
+                bombs: this.gameState.bombs.map(bomb => ({
+                    x: bomb.x,
+                    y: bomb.y,
+                    placedTime: bomb.placedTime,
+                    fuseTime: this.gameState.bombFuseTime
+                })),
+                explosions: this.gameState.explosions,
+                indestructibleWalls: this.gameState.indestructibleWalls,
+                destructibleWalls: this.gameState.destructibleWalls.map(w => ({
+                    x: w.x,
+                    y: w.y
+                })),
+                winnerId: this.gameState.winnerId,
+                width: this.gameState.width,
+                height: this.gameState.height,
+                timestamp: now
+            };
+
+            socket.emit('gameState', state);
+        });
     }
 
     handleDisconnect(playerId) {
@@ -677,6 +727,8 @@ class BombermanGame {
                 maxBombs: 1, // Maximum bombs that can be placed simultaneously
                 activeBombs: 0, // Current number of bombs placed
                 bombRange: 1, // Bomb explosion range (starts at 1)
+                speedBoosts: 0, // Number of speed boosts collected (max 5)
+                invisibleUntil: 0, // Timestamp when invisibility expires (0 = not invisible)
                 alive: true,
                 lastMoveTime: Date.now(),
                 lastActivityTime: Date.now(),
@@ -701,6 +753,8 @@ class BombermanGame {
                         maxBombs: player.maxBombs,
                         activeBombs: player.activeBombs,
                         bombRange: player.bombRange,
+                        speedBoosts: player.speedBoosts,
+                        invisibleUntil: player.invisibleUntil,
                         alive: player.alive
                     })),
                     bombPickups: this.gameState.bombPickups,
@@ -801,6 +855,8 @@ class BombermanGame {
                     playerToKeep.maxBombs = 1;
                     playerToKeep.activeBombs = 0;
                     playerToKeep.bombRange = 1;
+                    playerToKeep.speedBoosts = 0;
+                    playerToKeep.invisibleUntil = 0;
                     playerToKeep.alive = true;
                     playerToKeep.currentDirection = null;
                     playerToKeep.lastMoveTime = Date.now();
@@ -843,6 +899,8 @@ class BombermanGame {
                         player.maxBombs = 1;
                         player.activeBombs = 0;
                         player.bombRange = 1;
+                        player.speedBoosts = 0;
+                        player.invisibleUntil = 0;
                         player.alive = true;
                         player.currentDirection = null;
                         player.lastMoveTime = Date.now();

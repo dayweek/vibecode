@@ -107,6 +107,9 @@ function setup() {
                 localPlayer.alive = serverPlayer.alive;
                 localPlayer.activeBombs = serverPlayer.activeBombs;
                 localPlayer.maxBombs = serverPlayer.maxBombs;
+                localPlayer.bombRange = serverPlayer.bombRange;
+                localPlayer.speedBoosts = serverPlayer.speedBoosts;
+                localPlayer.invisibleUntil = serverPlayer.invisibleUntil;
                 localPlayer.isMoving = serverPlayer.isMoving;
 
             } else {
@@ -342,6 +345,28 @@ function drawPowerups() {
             textSize(20);
             textAlign(CENTER, CENTER);
             text("F", powerup.x + scl/2, powerup.y + scl/2);
+        } else if (powerup.type === 'speed') {
+            // Draw speed powerup as a cyan circle
+            fill(0, 255, 255); // Cyan
+            noStroke();
+            ellipse(powerup.x + scl/2, powerup.y + scl/2, scl * 0.6, scl * 0.6);
+
+            // Draw a speed symbol (S)
+            fill(0, 0, 0); // Black text
+            textSize(20);
+            textAlign(CENTER, CENTER);
+            text("S", powerup.x + scl/2, powerup.y + scl/2);
+        } else if (powerup.type === 'invisibility') {
+            // Draw invisibility powerup as a purple circle with glow
+            fill(138, 43, 226); // Purple
+            noStroke();
+            ellipse(powerup.x + scl/2, powerup.y + scl/2, scl * 0.6, scl * 0.6);
+
+            // Draw an invisibility symbol (I)
+            fill(255, 255, 255); // White text
+            textSize(20);
+            textAlign(CENTER, CENTER);
+            text("I", powerup.x + scl/2, powerup.y + scl/2);
         }
     });
 }
@@ -400,6 +425,20 @@ function drawUI() {
     const playersAliveElement = document.getElementById('players-alive');
     if (playersAliveElement) {
         playersAliveElement.textContent = `${alivePlayers} Alive`;
+    }
+
+    // Update invisibility status
+    const invisibilityStatus = document.getElementById('invisibility-status');
+    if (invisibilityStatus && players.has(playerId)) {
+        const myPlayer = players.get(playerId);
+        const now = Date.now();
+        const isInvisible = myPlayer.invisibleUntil && myPlayer.invisibleUntil > now;
+
+        if (isInvisible) {
+            invisibilityStatus.style.display = 'block';
+        } else {
+            invisibilityStatus.style.display = 'none';
+        }
     }
 }
 
