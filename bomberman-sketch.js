@@ -3,6 +3,7 @@ let socket;
 let playerId;
 let players = new Map(); // Map of playerId -> player data
 let bombPickups = []; // Bomb pickups on the map
+let powerups = []; // Flame powerups on the map
 let bombs = []; // Active bombs
 let explosions = []; // Active explosions
 let indestructibleWalls = []; // Permanent walls
@@ -61,6 +62,7 @@ function setup() {
             players.set(player.id, player);
         });
         bombPickups = data.gameState.bombPickups || [];
+        powerups = data.gameState.powerups || [];
         bombs = data.gameState.bombs || [];
         explosions = data.gameState.explosions || [];
         indestructibleWalls = data.gameState.indestructibleWalls || [];
@@ -128,6 +130,7 @@ function setup() {
         }
 
         bombPickups = state.bombPickups || [];
+        powerups = state.powerups || [];
         bombs = state.bombs || [];
         explosions = state.explosions || [];
         indestructibleWalls = state.indestructibleWalls || [];
@@ -251,6 +254,9 @@ function draw() {
     // Draw bomb pickups
     drawBombPickups();
 
+    // Draw powerups
+    drawPowerups();
+
     // Draw explosions (behind players)
     drawExplosions();
 
@@ -320,6 +326,23 @@ function drawBombPickups() {
         textAlign(CENTER, CENTER);
         text("B", pickup.x + scl/2, pickup.y + scl/2);
         fill(255, 215, 0);
+    });
+}
+
+function drawPowerups() {
+    powerups.forEach(powerup => {
+        if (powerup.type === 'flame') {
+            // Draw flame powerup as a red/orange circle
+            fill(255, 69, 0); // Red-orange
+            noStroke();
+            ellipse(powerup.x + scl/2, powerup.y + scl/2, scl * 0.6, scl * 0.6);
+
+            // Draw a flame symbol (F)
+            fill(255, 255, 0); // Yellow text
+            textSize(20);
+            textAlign(CENTER, CENTER);
+            text("F", powerup.x + scl/2, powerup.y + scl/2);
+        }
     });
 }
 

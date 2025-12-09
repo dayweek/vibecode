@@ -14,6 +14,7 @@ class BombermanGame {
         this.gameState = {
             players: new Map(),
             bombPickups: [],
+            powerups: [], // Flame powerups
             bombs: [],
             explosions: [],
             indestructibleWalls: [], // Permanent walls
@@ -31,9 +32,10 @@ class BombermanGame {
             maxBombPickups: 10,
             bombFuseTime: 3000, // 3 seconds
             explosionDuration: 500, // 0.5 seconds
-            explosionRange: 2, // Tiles in each direction (cross pattern)
+            baseExplosionRange: 1, // Base explosion range for new players
             destructibleWallDensity: 0.4, // 40% of non-indestructible tiles
             hiddenBombChance: 0.25, // 25% of destructible walls contain bombs
+            flamePowerupChance: 0.3, // 30% chance to spawn flame powerup when wall destroyed
             maxPlayers: 20 // Maximum expected players for full-size grid
         };
 
@@ -91,10 +93,11 @@ class BombermanGame {
                 player.activeBombs = 0; // Reset active bombs since we cleared them
             });
 
-            // Clear bombs and pickups
+            // Clear bombs, pickups, and powerups
             this.gameState.bombs = [];
             this.gameState.explosions = [];
             this.gameState.bombPickups = [];
+            this.gameState.powerups = [];
 
             return true; // Grid was resized
         }
@@ -314,11 +317,14 @@ class BombermanGame {
             const timeElapsed = now - bomb.placedTime;
 
             if (timeElapsed >= this.gameState.bombFuseTime) {
-                // Bomb explodes - pass the playerId who placed it AND the walls set
-                this.createExplosion(bomb.x, bomb.y, wallsToDestroy);
+                // Get the player who placed the bomb to use their bombRange
+                const player = this.gameState.players.get(bomb.playerId);
+                const bombRange = player ? player.bombRange : this.gameState.baseExplosionRange;
+
+                // Bomb explodes - pass the bomb range AND the walls set
+                this.createExplosion(bomb.x, bomb.y, wallsToDestroy, bombRange);
 
                 // Decrement activeBombs for the player who placed it
-                const player = this.gameState.players.get(bomb.playerId);
                 if (player && player.activeBombs > 0) {
                     player.activeBombs--;
                 }
@@ -339,6 +345,14 @@ class BombermanGame {
                     // Drop bomb pickup if wall contained one
                     if (wall.hasHiddenBomb) {
                         this.gameState.bombPickups.push({ x: wall.x, y: wall.y });
+                    }
+                    // Random chance to spawn flame powerup
+                    else if (Math.random() < this.gameState.flamePowerupChance) {
+                        this.gameState.powerups.push({
+                            x: wall.x,
+                            y: wall.y,
+                            type: 'flame' // Increases bomb explosion range
+                        });
                     }
                     return false; // Remove from array
                 }
@@ -410,6 +424,23 @@ class BombermanGame {
                             const playerSocket = this.io.of('/bomberman').sockets.get(playerId);
                             if (playerSocket) playerSocket.emit('playEatSound');
                         }
+
+                        // Check for powerup collection
+                        const powerupIndex = this.gameState.powerups.findIndex(
+                            p => p.x === newX && p.y === newY
+                        );
+
+                        if (powerupIndex !== -1) {
+                            const powerup = this.gameState.powerups[powerupIndex];
+                            if (powerup.type === 'flame') {
+                                player.bombRange++; // Increase bomb explosion range
+                            }
+                            this.gameState.powerups.splice(powerupIndex, 1);
+
+                            // Emit sound effect
+                            const playerSocket = this.io.of('/bomberman').sockets.get(playerId);
+                            if (playerSocket) playerSocket.emit('playEatSound');
+                        }
                     }
                 }
 
@@ -443,7 +474,7 @@ class BombermanGame {
         }
     }
 
-    createExplosion(centerX, centerY, wallsToDestroy) {
+    createExplosion(centerX, centerY, wallsToDestroy, bombRange) {
         const explosionTiles = [];
         const scale = this.gameState.scale;
         const bombsToChainExplode = []; // Track bombs hit by this explosion
@@ -469,7 +500,7 @@ class BombermanGame {
         ];
 
         directions.forEach(dir => {
-            for (let i = 1; i <= this.gameState.explosionRange; i++) {
+            for (let i = 1; i <= bombRange; i++) {
                 const x = centerX + dir.x * scale * i;
                 const y = centerY + dir.y * scale * i;
 
@@ -539,8 +570,11 @@ class BombermanGame {
                     player.activeBombs--;
                 }
 
+                // Get the range for the chain-exploded bomb
+                const chainBombRange = player ? player.bombRange : this.gameState.baseExplosionRange;
+
                 // Trigger explosion at bomb location (chain reaction)
-                this.createExplosion(bomb.x, bomb.y, wallsToDestroy);
+                this.createExplosion(bomb.x, bomb.y, wallsToDestroy, chainBombRange);
             }
         });
     }
@@ -554,11 +588,13 @@ class BombermanGame {
                 color: player.color,
                 maxBombs: player.maxBombs,
                 activeBombs: player.activeBombs,
+                bombRange: player.bombRange,
                 alive: player.alive,
                 lastMoveTime: player.lastMoveTime, // Add this for client-side animation
                 isMoving: !!player.currentDirection // Send moving state for easing
             })),
             bombPickups: this.gameState.bombPickups,
+            powerups: this.gameState.powerups,
             bombs: this.gameState.bombs.map(bomb => ({
                 x: bomb.x,
                 y: bomb.y,
@@ -640,6 +676,7 @@ class BombermanGame {
                 color: color,
                 maxBombs: 1, // Maximum bombs that can be placed simultaneously
                 activeBombs: 0, // Current number of bombs placed
+                bombRange: 1, // Bomb explosion range (starts at 1)
                 alive: true,
                 lastMoveTime: Date.now(),
                 lastActivityTime: Date.now(),
@@ -663,9 +700,11 @@ class BombermanGame {
                         color: player.color,
                         maxBombs: player.maxBombs,
                         activeBombs: player.activeBombs,
+                        bombRange: player.bombRange,
                         alive: player.alive
                     })),
                     bombPickups: this.gameState.bombPickups,
+                    powerups: this.gameState.powerups,
                     bombs: this.gameState.bombs,
                     explosions: this.gameState.explosions,
                     indestructibleWalls: this.gameState.indestructibleWalls,
@@ -761,6 +800,7 @@ class BombermanGame {
                     playerToKeep.y = pos.y;
                     playerToKeep.maxBombs = 1;
                     playerToKeep.activeBombs = 0;
+                    playerToKeep.bombRange = 1;
                     playerToKeep.alive = true;
                     playerToKeep.currentDirection = null;
                     playerToKeep.lastMoveTime = Date.now();
@@ -771,6 +811,7 @@ class BombermanGame {
                 this.gameState.bombs = [];
                 this.gameState.explosions = [];
                 this.gameState.bombPickups = [];
+                this.gameState.powerups = [];
                 this.gameState.winnerId = null;
 
                 // Respawn initial bomb pickups
@@ -792,6 +833,7 @@ class BombermanGame {
                     this.gameState.bombs = [];
                     this.gameState.explosions = [];
                     this.gameState.bombPickups = [];
+                    this.gameState.powerups = [];
 
                     // Reset all players
                     this.gameState.players.forEach((player) => {
@@ -800,6 +842,7 @@ class BombermanGame {
                         player.y = pos.y;
                         player.maxBombs = 1;
                         player.activeBombs = 0;
+                        player.bombRange = 1;
                         player.alive = true;
                         player.currentDirection = null;
                         player.lastMoveTime = Date.now();
