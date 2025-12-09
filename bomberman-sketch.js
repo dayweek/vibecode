@@ -51,6 +51,17 @@ let boxSprite = null; // Destructible wall
 let wallCenterSprite = null; // Indestructible wall
 let bombSprite = null; // Bomb
 
+// Floor assets
+let floorImages = [];
+const floorFiles = [
+    'floor_light.png',
+    'floor_mud_e.png', 'floor_mud_mid_1.png', 'floor_mud_mid_2.png',
+    'floor_mud_n_1.png', 'floor_mud_n_2.png', 'floor_mud_ne.png',
+    'floor_mud_nw.png', 'floor_mud_s_1.png', 'floor_mud_s_2.png',
+    'floor_mud_se.png', 'floor_mud_sw.png', 'floor_mud_w.png'
+];
+let floorGrid = [];
+
 const serverMoveInterval = 195; // Matches server's moveInterval (30% slower)
 
 function preload() {
@@ -63,6 +74,11 @@ function preload() {
     boxSprite = loadImage('bomberman-assets/box.png');
     wallCenterSprite = loadImage('bomberman-assets/wall_center.png');
     bombSprite = loadImage('bomberman-assets/weapon_bomb.png');
+
+    // Load floor sprites
+    for (let i = 0; i < floorFiles.length; i++) {
+        floorImages[i] = loadImage('bomberman-assets/floor/' + floorFiles[i]);
+    }
 }
 
 function setup() {
@@ -189,6 +205,7 @@ function setup() {
         if (state.width && state.height) {
             if (width !== state.width || height !== state.height) {
                 resizeCanvas(state.width, state.height);
+                generateFloorGrid(); // Regenerate floor on resize
             }
         }
 
@@ -293,10 +310,8 @@ function setup() {
 }
 
 function draw() {
-    background(34, 139, 34); // Green background
-
-    // Draw grid
-    drawGrid();
+    // Draw floor
+    drawFloor();
 
     // Draw walls
     drawWalls();
@@ -325,18 +340,36 @@ function draw() {
     }
 }
 
-function drawGrid() {
-    stroke(50, 150, 50);
-    strokeWeight(1);
+function generateFloorGrid() {
+    const cols = ceil(width / scl);
+    const rows = ceil(height / scl);
+    floorGrid = [];
+    for (let x = 0; x < cols; x++) {
+        floorGrid[x] = [];
+        for (let y = 0; y < rows; y++) {
+            // Weighted random: 80% light floor, 20% others
+            let r = random(1);
+            let index = 0;
+            if (r > 0.8) {
+                index = floor(random(1, floorImages.length));
+            }
+            floorGrid[x][y] = index;
+        }
+    }
+}
 
-    // Vertical lines
-    for (let x = 0; x <= width; x += scl) {
-        line(x, 0, x, height);
+function drawFloor() {
+    if (floorGrid.length === 0 || floorGrid.length !== ceil(width / scl) || (floorGrid[0] && floorGrid[0].length !== ceil(height / scl))) {
+        generateFloorGrid();
     }
 
-    // Horizontal lines
-    for (let y = 0; y <= height; y += scl) {
-        line(0, y, width, y);
+    for (let x = 0; x < floorGrid.length; x++) {
+        for (let y = 0; y < floorGrid[x].length; y++) {
+            let imgIndex = floorGrid[x][y];
+            if (floorImages[imgIndex]) {
+                image(floorImages[imgIndex], x * scl, y * scl, scl, scl);
+            }
+        }
     }
 }
 
