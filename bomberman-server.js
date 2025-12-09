@@ -410,6 +410,7 @@ class BombermanGame {
     createExplosion(centerX, centerY) {
         const explosionTiles = [];
         const scale = this.gameState.scale;
+        const bombsToChainExplode = []; // Track bombs hit by this explosion
 
         // Center tile always explodes
         explosionTiles.push({ x: centerX, y: centerY });
@@ -471,6 +472,34 @@ class BombermanGame {
                 y: tile.y,
                 createdTime: now
             });
+
+            // Check if there's a bomb at this explosion tile
+            const bombIndex = this.gameState.bombs.findIndex(
+                b => b.x === tile.x && b.y === tile.y
+            );
+            if (bombIndex !== -1) {
+                bombsToChainExplode.push(this.gameState.bombs[bombIndex]);
+            }
+        });
+
+        // Trigger chain explosions for bombs caught in this explosion
+        bombsToChainExplode.forEach(bomb => {
+            // Remove the bomb from the array
+            const bombIndex = this.gameState.bombs.findIndex(
+                b => b.x === bomb.x && b.y === bomb.y
+            );
+            if (bombIndex !== -1) {
+                this.gameState.bombs.splice(bombIndex, 1);
+
+                // Decrement activeBombs for the player who placed it
+                const player = this.gameState.players.get(bomb.playerId);
+                if (player && player.activeBombs > 0) {
+                    player.activeBombs--;
+                }
+
+                // Trigger explosion at bomb location (chain reaction)
+                this.createExplosion(bomb.x, bomb.y);
+            }
         });
     }
 
@@ -634,6 +663,8 @@ class BombermanGame {
                 if (player && player.alive) {
                     player.lastActivityTime = Date.now();
                     player.currentDirection = direction;
+                    // Reset move timer to allow immediate direction change
+                    player.lastMoveTime = Date.now() - this.gameState.moveInterval;
                 }
             });
 

@@ -11,6 +11,7 @@ let winnerId = null;
 let winnerDetectedTime = null;
 let winDelaySeconds = 3;
 let keysPressed = {}; // Track which keys are currently pressed
+let directionKeys = []; // Track order of pressed direction keys
 
 function setup() {
     const canvas = createCanvas(960, 800); // 20% wider
@@ -139,18 +140,15 @@ function setup() {
         backgroundMusic.play().catch(error => {
             console.error("Initial music play failed:", error);
             isMusicPlaying = false;
-            toggleMusicButton.textContent = 'Play Music';
         });
 
         toggleMusicButton.addEventListener('click', () => {
             if (isMusicPlaying) {
                 backgroundMusic.pause();
-                toggleMusicButton.textContent = 'Play Music';
             } else {
                 backgroundMusic.play().catch(error => {
                     console.error("Error playing music:", error);
                 });
-                toggleMusicButton.textContent = 'Pause Music';
             }
             isMusicPlaying = !isMusicPlaying;
         });
@@ -276,31 +274,12 @@ function drawPlayers() {
 }
 
 function drawUI() {
-    const localPlayer = players.get(playerId);
-
-    if (localPlayer) {
-        // Draw bomb count
-        fill(0, 0, 0, 150);
-        noStroke();
-        rect(10, 10, 200, 40);
-
-        fill(255);
-        textSize(20);
-        textAlign(LEFT, TOP);
-        const availableBombs = localPlayer.maxBombs - localPlayer.activeBombs;
-        text(`Bombs: ${availableBombs}/${localPlayer.maxBombs}`, 20, 20);
-    }
-
-    // Draw player count
-    fill(0, 0, 0, 150);
-    noStroke();
-    rect(10, 60, 200, 40);
-
-    fill(255);
-    textSize(20);
-    textAlign(LEFT, TOP);
+    // Update HTML elements instead of drawing on canvas
     const alivePlayers = Array.from(players.values()).filter(p => p.alive).length;
-    text(`Players Alive: ${alivePlayers}`, 20, 70);
+    const playersAliveElement = document.getElementById('players-alive');
+    if (playersAliveElement) {
+        playersAliveElement.textContent = `${alivePlayers} Alive`;
+    }
 }
 
 function drawWinnerMessage() {
@@ -359,22 +338,32 @@ function keyPressed() {
     // Track key press
     keysPressed[keyCode] = true;
 
-    // Movement with arrow keys
-    if (keyCode === UP_ARROW && !keysPressed.lastDirection) {
-        socket.emit('moveStart', { x: 0, y: -1 });
-        keysPressed.lastDirection = UP_ARROW;
-    } else if (keyCode === DOWN_ARROW && !keysPressed.lastDirection) {
-        socket.emit('moveStart', { x: 0, y: 1 });
-        keysPressed.lastDirection = DOWN_ARROW;
-    } else if (keyCode === LEFT_ARROW && !keysPressed.lastDirection) {
-        socket.emit('moveStart', { x: -1, y: 0 });
-        keysPressed.lastDirection = LEFT_ARROW;
-    } else if (keyCode === RIGHT_ARROW && !keysPressed.lastDirection) {
-        socket.emit('moveStart', { x: 1, y: 0 });
-        keysPressed.lastDirection = RIGHT_ARROW;
-    } else if (key === ' ' || keyCode === 32) {
-        // Space bar to place bomb
+    // Handle space bar for bombs (separate from directional keys)
+    if (key === ' ' || keyCode === 32) {
         socket.emit('placeBomb');
+        return false;
+    }
+
+    // Movement with arrow keys
+    let direction = null;
+    if (keyCode === UP_ARROW) {
+        direction = { x: 0, y: -1 };
+    } else if (keyCode === DOWN_ARROW) {
+        direction = { x: 0, y: 1 };
+    } else if (keyCode === LEFT_ARROW) {
+        direction = { x: -1, y: 0 };
+    } else if (keyCode === RIGHT_ARROW) {
+        direction = { x: 1, y: 0 };
+    }
+
+    // If a direction key was pressed, add it to the array if not already there
+    if (direction) {
+        // Remove this key if it's already in the array (to update its position)
+        directionKeys = directionKeys.filter(k => k.keyCode !== keyCode);
+        // Add to the end (most recent)
+        directionKeys.push({ keyCode, direction });
+        // Emit moveStart with the most recent direction
+        socket.emit('moveStart', direction);
     }
 
     return false; // Prevent default behavior
@@ -394,10 +383,16 @@ function keyReleased() {
     // Remove key from tracking
     keysPressed[keyCode] = false;
 
-    // Stop movement when the current direction key is released
-    if (keyCode === keysPressed.lastDirection) {
+    // Remove this key from directionKeys array
+    directionKeys = directionKeys.filter(k => k.keyCode !== keyCode);
+
+    // If there are still direction keys pressed, switch to the most recent one
+    if (directionKeys.length > 0) {
+        const mostRecent = directionKeys[directionKeys.length - 1];
+        socket.emit('moveStart', mostRecent.direction);
+    } else {
+        // No direction keys pressed, stop movement
         socket.emit('moveStop');
-        keysPressed.lastDirection = null;
     }
 
     return false; // Prevent default behavior

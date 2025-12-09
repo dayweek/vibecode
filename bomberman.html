@@ -24,25 +24,51 @@
         }
         #game-container {
             display: flex;
-            flex-direction: column;
-            align-items: center;
+            flex-direction: row;
+            align-items: flex-start;
+            gap: 20px;
         }
-        canvas {
-            border: 2px solid #333;
-            margin-bottom: 10px;
+        #left-panel {
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+            padding-top: 10px;
+            width: 80px;
         }
         #controls {
             display: flex;
-            gap: 10px;
+            flex-direction: column;
+            gap: 8px;
+        }
+        #game-stats {
+            background-color: #2a2a2a;
+            padding: 8px 10px;
+            border-radius: 5px;
+            border: 2px solid #333;
+        }
+        #game-stats h3 {
+            margin: 0 0 5px 0;
+            font-size: 12px;
+            font-weight: normal;
+            color: #999;
+        }
+        #players-alive {
+            font-size: 16px;
+            font-weight: bold;
+            color: #4CAF50;
+        }
+        canvas {
+            border: 2px solid #333;
         }
         button {
-            padding: 10px 20px;
-            font-size: 16px;
+            padding: 6px 10px;
+            font-size: 13px;
             cursor: pointer;
             background-color: #444;
             color: white;
             border: 2px solid #666;
             border-radius: 5px;
+            width: 100%;
         }
         button:hover {
             background-color: #555;
@@ -51,9 +77,15 @@
 </head>
 <body>
     <div id="game-container">
-        <div id="controls">
-            <button id="resetButton">Reset Game</button>
-            <button id="toggleMusicButton">Pause Music</button>
+        <div id="left-panel">
+            <div id="controls">
+                <button id="resetButton">Reset</button>
+                <button id="toggleMusicButton">Music</button>
+            </div>
+            <div id="game-stats">
+                <h3>Players</h3>
+                <div id="players-alive">0 Alive</div>
+            </div>
         </div>
     </div>
 
