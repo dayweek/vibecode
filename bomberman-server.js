@@ -376,10 +376,28 @@ class BombermanGame {
                     if (wall.hasHiddenBomb) {
                         this.gameState.bombPickups.push({ x: wall.x, y: wall.y });
                     }
-                    // Check for powerup (random chance)
-                    if (Math.random() < this.gameState.powerupChance) {
-                        const type = Math.random() < 0.5 ? 'flame' : (Math.random() < 0.5 ? 'speed' : 'invisibility');
-                        this.gameState.powerups.push({ x: wall.x, y: wall.y, type });
+                    // Random chance to spawn powerups (check in order: invisibility, flame, speed)
+                    else {
+                        const roll = Math.random();
+                        if (roll < this.gameState.invisibilityPowerupChance) {
+                            this.gameState.powerups.push({
+                                x: wall.x,
+                                y: wall.y,
+                                type: 'invisibility' // Makes player invisible for 10 seconds
+                            });
+                        } else if (roll < this.gameState.invisibilityPowerupChance + this.gameState.flamePowerupChance) {
+                            this.gameState.powerups.push({
+                                x: wall.x,
+                                y: wall.y,
+                                type: 'flame' // Increases bomb explosion range
+                            });
+                        } else if (roll < this.gameState.invisibilityPowerupChance + this.gameState.flamePowerupChance + this.gameState.speedPowerupChance) {
+                            this.gameState.powerups.push({
+                                x: wall.x,
+                                y: wall.y,
+                                type: 'speed' // Increases movement speed by 10%
+                            });
+                        }
                     }
                     return false; // Remove from array
                 }
@@ -792,14 +810,6 @@ class BombermanGame {
             // Handle bomb placement
             socket.on('placeBomb', () => {
                 const player = this.gameState.players.get(socket.id);
-
-                if (!player) {
-                    console.log(`[placeBomb] Player ${socket.id} not found in game state`);
-                    return;
-                }
-
-                console.log(`[placeBomb] Player ${socket.id.substring(0, 6)}: alive=${player.alive}, activeBombs=${player.activeBombs}, maxBombs=${player.maxBombs}`);
-
                 if (player && player.alive && player.activeBombs < player.maxBombs) {
                     player.lastActivityTime = Date.now();
 
@@ -818,12 +828,7 @@ class BombermanGame {
 
                         player.activeBombs++; // Increment active bomb count
                         player.lastBombPlacedTime = Date.now(); // Track when bomb was placed
-                        console.log(`[placeBomb] Player ${socket.id.substring(0, 6)} placed bomb. activeBombs now: ${player.activeBombs}`);
-                    } else {
-                        console.log(`[placeBomb] Player ${socket.id.substring(0, 6)}: bomb already exists at position`);
                     }
-                } else {
-                    console.log(`[placeBomb] Player ${socket.id.substring(0, 6)}: cannot place bomb (alive=${player.alive}, activeBombs=${player.activeBombs} >= maxBombs=${player.maxBombs})`);
                 }
             });
 
