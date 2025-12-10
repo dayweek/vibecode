@@ -427,6 +427,9 @@ class BombermanGame {
         // 3. Remove all exploded bombs from game state
         if (bombsToExplode.size > 0) {
             this.gameState.bombs = this.gameState.bombs.filter(bomb => !bombsToExplode.has(bomb));
+
+            // Emit explosion sound to all players (once per tick, even for chain reactions)
+            this.io.of('/bomberman').emit('playExplosionSound');
         }
 
         // Process deferred wall destruction
@@ -533,9 +536,9 @@ class BombermanGame {
                             player.maxBombs++; // Increase maximum simultaneous bombs
                             this.gameState.bombPickups.splice(pickupIndex, 1);
 
-                            // Emit sound effect
+                            // Emit level-up sound to this player only
                             const playerSocket = this.io.of('/bomberman').sockets.get(playerId);
-                            if (playerSocket) playerSocket.emit('playEatSound');
+                            if (playerSocket) playerSocket.emit('playLevelUpSound');
                         }
 
                         // Check for powerup collection
@@ -557,9 +560,9 @@ class BombermanGame {
                             }
                             this.gameState.powerups.splice(powerupIndex, 1);
 
-                            // Emit sound effect
+                            // Emit level-up sound to this player only
                             const playerSocket = this.io.of('/bomberman').sockets.get(playerId);
-                            if (playerSocket) playerSocket.emit('playEatSound');
+                            if (playerSocket) playerSocket.emit('playLevelUpSound');
                         }
                     }
                 }

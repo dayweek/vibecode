@@ -17,6 +17,9 @@ let directionKeys = []; // Track order of pressed direction keys
 // Variable for player color
 let myColor = null;
 
+// Sound effects toggle
+let isSoundEnabled = true; // Sound on by default
+
 // Player character sprites
 let characterSprites = [];
 const characterFiles = [
@@ -264,6 +267,7 @@ function setup() {
     // });
 
     socket.on('playDieSound', () => {
+        if (!isSoundEnabled) return;
         const dieSound = document.getElementById('dieSound');
         if (dieSound) {
             dieSound.currentTime = 0;
@@ -280,10 +284,29 @@ function setup() {
     // });
 
     socket.on('playWinSound', () => {
+        if (!isSoundEnabled) return;
         const winSound = document.getElementById('winSound');
         if (winSound) {
             winSound.currentTime = 0;
             winSound.play().catch(e => console.error("Error playing win sound:", e));
+        }
+    });
+
+    socket.on('playExplosionSound', () => {
+        if (!isSoundEnabled) return;
+        const explosionSound = document.getElementById('explosionSound');
+        if (explosionSound) {
+            explosionSound.currentTime = 0;
+            explosionSound.play().catch(e => console.error("Error playing explosion sound:", e));
+        }
+    });
+
+    socket.on('playLevelUpSound', () => {
+        if (!isSoundEnabled) return;
+        const levelUpSound = document.getElementById('levelUpSound');
+        if (levelUpSound) {
+            levelUpSound.currentTime = 0;
+            levelUpSound.play().catch(e => console.error("Error playing level-up sound:", e));
         }
     });
 
@@ -318,6 +341,17 @@ function setup() {
                 toggleMusicButton.textContent = 'Pause Music';
             }
             isMusicPlaying = !isMusicPlaying;
+        });
+    }
+
+    // Sound effects toggle listener
+    const toggleSoundButton = document.getElementById('toggleSoundButton');
+    if (toggleSoundButton) {
+        toggleSoundButton.textContent = 'Sound On'; // Start enabled
+
+        toggleSoundButton.addEventListener('click', () => {
+            isSoundEnabled = !isSoundEnabled;
+            toggleSoundButton.textContent = isSoundEnabled ? 'Sound On' : 'Sound Off';
         });
     }
 }
