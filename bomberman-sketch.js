@@ -91,6 +91,19 @@ function setup() {
 
     socket.on('connect', () => {
         console.log('Connected to Bomberman server');
+
+        // Check if we have a saved persistent player ID
+        let persistentId = localStorage.getItem('bomberman_player_id');
+
+        // If we don't have one, generate a new one
+        if (!persistentId) {
+            persistentId = 'player_' + Math.random().toString(36).substring(2, 11) + '_' + Date.now();
+            localStorage.setItem('bomberman_player_id', persistentId);
+        }
+
+        // Send reconnect request with persistent ID
+        socket.emit('reconnect_player', persistentId);
+
         myColor = null;
         // Hide color display on reconnect
         const yourColorDiv = document.getElementById('your-color');

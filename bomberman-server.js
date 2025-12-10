@@ -11,6 +11,8 @@ const COLORS = [
 class BombermanGame {
     constructor(io) {
         this.io = io;
+        this.persistentPlayers = new Map(); // Map of persistentId -> player data for reconnection
+        this.socketToPersistentId = new Map(); // Map of socket.id -> persistentId
         this.gameState = {
             players: new Map(),
             bombPickups: [],
@@ -33,7 +35,7 @@ class BombermanGame {
             bombFuseTime: 3000, // 3 seconds
             explosionDuration: 500, // 0.5 seconds
             baseExplosionRange: 1, // Base explosion range for new players
-            destructibleWallDensity: 0.4, // 40% of non-indestructible tiles
+            destructibleWallDensity: 0.55, // 55% of non-indestructible tiles
             hiddenBombChance: 0.333, // 33.3% of destructible walls contain bombs (2x flame powerups)
             flamePowerupChance: 0.25, // 25% chance to spawn flame powerup when wall destroyed
             speedPowerupChance: 0.25, // 25% chance to spawn speed powerup when wall destroyed
@@ -187,14 +189,63 @@ class BombermanGame {
             }
         }
 
-        // Step 2: Place destructible walls randomly
+        // Step 1.5: Create edge pocket walls to separate spawn zones
+        // Add walls near edges (not on edges) to create pockets
+        const pocketWallDistance = 4; // Distance from edge to place pocket walls
+
+        // Top and bottom edge pockets
+        for (let col = pocketWallDistance; col < cols - pocketWallDistance; col += 2) {
+            // Top pocket walls (skip middle spawn point area)
+            if (col < Math.floor(cols / 2) - 2 || col > Math.floor(cols / 2) + 2) {
+                if (!isInSafeZone(col, 2)) {
+                    this.gameState.destructibleWalls.push({
+                        x: col * scale,
+                        y: 2 * scale,
+                        hasHiddenBomb: false
+                    });
+                }
+            }
+            // Bottom pocket walls (skip middle spawn point area)
+            if (col < Math.floor(cols / 2) - 2 || col > Math.floor(cols / 2) + 2) {
+                if (!isInSafeZone(col, rows - 3)) {
+                    this.gameState.destructibleWalls.push({
+                        x: col * scale,
+                        y: (rows - 3) * scale,
+                        hasHiddenBomb: false
+                    });
+                }
+            }
+        }
+
+        // Left and right edge pockets
+        for (let row = pocketWallDistance; row < rows - pocketWallDistance; row += 2) {
+            // Left pocket walls (skip middle spawn point area)
+            if (row < Math.floor(rows / 2) - 2 || row > Math.floor(rows / 2) + 2) {
+                if (!isInSafeZone(2, row)) {
+                    this.gameState.destructibleWalls.push({
+                        x: 2 * scale,
+                        y: row * scale,
+                        hasHiddenBomb: false
+                    });
+                }
+            }
+            // Right pocket walls (skip middle spawn point area)
+            if (row < Math.floor(rows / 2) - 2 || row > Math.floor(rows / 2) + 2) {
+                if (!isInSafeZone(cols - 3, row)) {
+                    this.gameState.destructibleWalls.push({
+                        x: (cols - 3) * scale,
+                        y: row * scale,
+                        hasHiddenBomb: false
+                    });
+                }
+            }
+        }
+
+        // Step 2: Place destructible walls randomly (including edges)
         for (let row = 0; row < rows; row++) {
             for (let col = 0; col < cols; col++) {
                 // Skip safe zones
                 if (isInSafeZone(col, row)) continue;
-
-                // Skip outer perimeter (edges) - don't place destructible walls on borders
-                if (row === 0 || row === rows - 1 || col === 0 || col === cols - 1) continue;
 
                 // Skip if there's already an indestructible wall
                 const hasIndestructible = this.gameState.indestructibleWalls.some(
@@ -202,8 +253,21 @@ class BombermanGame {
                 );
                 if (hasIndestructible) continue;
 
+                // Skip if there's already a pocket wall at this position
+                const hasPocketWall = this.gameState.destructibleWalls.some(
+                    w => w.x === col * scale && w.y === row * scale
+                );
+                if (hasPocketWall) continue;
+
+                // Higher density for edge walls to create better separation
+                let density = this.gameState.destructibleWallDensity;
+                const isEdge = row === 0 || row === rows - 1 || col === 0 || col === cols - 1;
+                if (isEdge) {
+                    density = 0.7; // 70% density on edges for better separation
+                }
+
                 // Place destructible wall with probability
-                if (Math.random() < this.gameState.destructibleWallDensity) {
+                if (Math.random() < density) {
                     const hasHiddenBomb = Math.random() < this.gameState.hiddenBombChance;
                     this.gameState.destructibleWalls.push({
                         x: col * scale,
@@ -517,17 +581,38 @@ class BombermanGame {
             });
         });
 
-        // Check win condition (only one player alive)
+        // Check win condition
         const alivePlayers = Array.from(this.gameState.players.values()).filter(p => p.alive);
-        if (alivePlayers.length === 1 && this.gameState.players.size > 1) {
-            this.gameState.winnerId = Array.from(this.gameState.players.entries())
-                .find(([id, player]) => player.alive)?.[0];
 
-            if (this.gameState.winnerId) {
-                console.log(`Player ${this.gameState.winnerId} wins!`);
-                this.io.of('/bomberman').emit('playWinSound');
+        if (this.gameState.players.size > 1) {
+            if (alivePlayers.length === 1) {
+                // One player alive - they win
+                this.gameState.winnerId = Array.from(this.gameState.players.entries())
+                    .find(([id, player]) => player.alive)?.[0];
+
+                if (this.gameState.winnerId) {
+                    console.log(`Player ${this.gameState.winnerId} wins!`);
+                    this.io.of('/bomberman').emit('playWinSound');
+                }
+            } else if (alivePlayers.length === 0 && !this.gameState.winnerId) {
+                // All players dead (last player killed themselves) - no winner, draw
+                console.log('All players eliminated - Draw! Restarting game...');
+                this.gameState.winnerId = 'draw'; // Special value to indicate draw
+
+                // Auto-restart after 3 seconds
+                setTimeout(() => {
+                    this.restartGame();
+                }, 3000);
             }
         }
+
+        // Sync active players to persistent storage
+        this.gameState.players.forEach((player, socketId) => {
+            const persistentId = this.socketToPersistentId.get(socketId);
+            if (persistentId) {
+                this.persistentPlayers.set(persistentId, { ...player });
+            }
+        });
     }
 
     createExplosion(centerX, centerY, wallsToDestroy, bombRange) {
@@ -616,6 +701,52 @@ class BombermanGame {
         return bombsToChainExplode;
     }
 
+    restartGame() {
+        console.log('Restarting game...');
+
+        // Reset winner
+        this.gameState.winnerId = null;
+
+        // Clear game objects
+        this.gameState.bombs = [];
+        this.gameState.explosions = [];
+        this.gameState.bombPickups = [];
+        this.gameState.powerups = [];
+
+        // Regenerate environment (walls)
+        this.generateEnvironment();
+
+        // Reset all players
+        this.gameState.players.forEach((player) => {
+            const pos = this.getRandomEmptyPosition();
+            player.x = pos.x;
+            player.y = pos.y;
+            player.maxBombs = 1;
+            player.activeBombs = 0;
+            player.bombRange = this.gameState.baseExplosionRange;
+            player.speedBoosts = 0;
+            player.invisibleUntil = 0;
+            player.alive = true;
+            player.currentDirection = null;
+            player.lastMoveTime = Date.now();
+            player.lastActivityTime = Date.now();
+        });
+
+        // Spawn initial bomb pickups
+        this.spawnInitialBombPickups();
+
+        // Update persistent storage
+        this.gameState.players.forEach((player, socketId) => {
+            const persistentId = this.socketToPersistentId.get(socketId);
+            if (persistentId) {
+                this.persistentPlayers.set(persistentId, { ...player });
+            }
+        });
+
+        // Broadcast new state
+        this.broadcastGameState();
+    }
+
     broadcastGameState() {
         const now = Date.now();
 
@@ -677,15 +808,33 @@ class BombermanGame {
         console.log(`Disconnecting Bomberman player ${playerId}...`);
         const player = this.gameState.players.get(playerId);
         if (player) {
-            this.gameState.usedColors.delete(player.color);
+            // Save player state for reconnection
+            const persistentId = this.socketToPersistentId.get(playerId);
+            if (persistentId) {
+                console.log(`Saving player state for ${persistentId}`);
+                this.persistentPlayers.set(persistentId, {
+                    ...player,
+                    disconnectedAt: Date.now()
+                });
+
+                // Clean up after 5 minutes
+                setTimeout(() => {
+                    const savedPlayer = this.persistentPlayers.get(persistentId);
+                    if (savedPlayer && savedPlayer.disconnectedAt) {
+                        console.log(`Removing saved state for ${persistentId} after timeout`);
+                        this.persistentPlayers.delete(persistentId);
+                        this.gameState.usedColors.delete(savedPlayer.color);
+                    }
+                }, 5 * 60 * 1000); // 5 minutes
+
+                this.socketToPersistentId.delete(playerId);
+            } else {
+                // No persistent ID, release color immediately
+                this.gameState.usedColors.delete(player.color);
+            }
+
             this.gameState.players.delete(playerId);
             this.io.of('/bomberman').emit('playerLeft', playerId);
-
-            // Removed: Dynamic grid resizing on player disconnect
-            // const gridResized = this.updateGridSize();
-            // if (gridResized) {
-            //     this.broadcastGameState();
-            // }
         }
     }
 
@@ -719,73 +868,108 @@ class BombermanGame {
         bombermanNamespace.on('connection', (socket) => {
             console.log('New Bomberman player connected:', socket.id);
 
-            const color = this.getAvailableColor();
-            this.gameState.usedColors.add(color);
+            let playerCreated = false;
 
-            // Send the assigned color to the player immediately
-            socket.emit('playerColor', color);
+            // Handle reconnection
+            socket.on('reconnect_player', (persistentId) => {
+                if (playerCreated) return; // Already created player for this socket
 
-            const pos = this.getRandomEmptyPosition();
+                console.log(`Reconnect request from ${socket.id} with persistentId: ${persistentId}`);
 
-            const newPlayer = {
-                x: pos.x,
-                y: pos.y,
-                color: color,
-                maxBombs: 1, // Maximum bombs that can be placed simultaneously
-                activeBombs: 0, // Current number of bombs placed
-                bombRange: 1, // Bomb explosion range (starts at 1)
-                speedBoosts: 0, // Number of speed boosts collected (max 5)
-                invisibleUntil: 0, // Timestamp when invisibility expires (0 = not invisible)
-                alive: true,
-                lastMoveTime: Date.now(),
-                lastActivityTime: Date.now(),
-                currentDirection: null, // Continuous movement direction
-                lastBombPlacedTime: 0 // Track when player last placed a bomb
-            };
+                // Check if we have saved data for this persistent ID
+                const savedPlayer = this.persistentPlayers.get(persistentId);
 
-            this.gameState.players.set(socket.id, newPlayer);
+                if (savedPlayer && savedPlayer.alive) {
+                    // Restore the player
+                    console.log(`Restoring player ${persistentId} at position (${savedPlayer.x}, ${savedPlayer.y})`);
 
-            // Removed: Dynamic grid resizing on player join
-            // const gridResized = this.updateGridSize();
+                    // Update the socket mapping
+                    this.socketToPersistentId.set(socket.id, persistentId);
 
-            // Send initial game state
-            socket.emit('init', {
-                playerId: socket.id,
-                gameState: {
-                    players: Array.from(this.gameState.players.entries()).map(([id, player]) => ({
-                        id,
-                        x: player.x,
-                        y: player.y,
-                        color: player.color,
-                        maxBombs: player.maxBombs,
-                        activeBombs: player.activeBombs,
-                        bombRange: player.bombRange,
-                        speedBoosts: player.speedBoosts,
-                        invisibleUntil: player.invisibleUntil,
-                        alive: player.alive
-                    })),
-                    bombPickups: this.gameState.bombPickups,
-                    powerups: this.gameState.powerups,
-                    bombs: this.gameState.bombs,
-                    explosions: this.gameState.explosions,
-                    indestructibleWalls: this.gameState.indestructibleWalls,
-                    destructibleWalls: this.gameState.destructibleWalls.map(w => ({ x: w.x, y: w.y })),
-                    width: this.gameState.width,
-                    height: this.gameState.height
+                    // Restore player with new socket ID
+                    const restoredPlayer = {
+                        ...savedPlayer,
+                        lastActivityTime: Date.now()
+                    };
+
+                    this.gameState.players.set(socket.id, restoredPlayer);
+                    socket.emit('playerColor', restoredPlayer.color);
+
+                    playerCreated = true;
+                } else {
+                    // New player - create fresh
+                    const color = this.getAvailableColor();
+                    this.gameState.usedColors.add(color);
+
+                    socket.emit('playerColor', color);
+
+                    const pos = this.getRandomEmptyPosition();
+
+                    const newPlayer = {
+                        x: pos.x,
+                        y: pos.y,
+                        color: color,
+                        maxBombs: 1,
+                        activeBombs: 0,
+                        bombRange: 1,
+                        speedBoosts: 0,
+                        invisibleUntil: 0,
+                        alive: true,
+                        lastMoveTime: Date.now(),
+                        lastActivityTime: Date.now(),
+                        currentDirection: null,
+                        lastBombPlacedTime: 0
+                    };
+
+                    this.gameState.players.set(socket.id, newPlayer);
+                    this.socketToPersistentId.set(socket.id, persistentId);
+                    this.persistentPlayers.set(persistentId, newPlayer);
+
+                    playerCreated = true;
                 }
+
+                // Send initial game state
+                socket.emit('init', {
+                    playerId: socket.id,
+                    gameState: {
+                        players: Array.from(this.gameState.players.entries()).map(([id, player]) => ({
+                            id,
+                            x: player.x,
+                            y: player.y,
+                            color: player.color,
+                            maxBombs: player.maxBombs,
+                            activeBombs: player.activeBombs,
+                            bombRange: player.bombRange,
+                            speedBoosts: player.speedBoosts,
+                            invisibleUntil: player.invisibleUntil,
+                            alive: player.alive
+                        })),
+                        bombPickups: this.gameState.bombPickups,
+                        powerups: this.gameState.powerups,
+                        bombs: this.gameState.bombs,
+                        explosions: this.gameState.explosions,
+                        indestructibleWalls: this.gameState.indestructibleWalls,
+                        destructibleWalls: this.gameState.destructibleWalls.map(w => ({ x: w.x, y: w.y })),
+                        width: this.gameState.width,
+                        height: this.gameState.height
+                    }
+                });
+
+                // Notify all players
+                bombermanNamespace.emit('playerJoined', {
+                    playerId: socket.id,
+                    playerData: this.gameState.players.get(socket.id)
+                });
+                bombermanNamespace.emit('playNewSound');
             });
 
-            // Notify all players
-            bombermanNamespace.emit('playerJoined', {
-                playerId: socket.id,
-                playerData: newPlayer
-            });
-            bombermanNamespace.emit('playNewSound');
-
-            // Removed: Dynamic grid resizing on player join
-            // if (gridResized) {
-            //     this.broadcastGameState();
-            // }
+            // Fallback: if no reconnect_player event received within 1 second, create new player
+            setTimeout(() => {
+                if (!playerCreated) {
+                    console.log(`No reconnect event received for ${socket.id}, creating new player`);
+                    socket.emit('reconnect_player', null); // Trigger with null ID
+                }
+            }, 1000);
 
             // Handle movement start
             socket.on('moveStart', (direction) => {
