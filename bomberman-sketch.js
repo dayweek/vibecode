@@ -8,6 +8,7 @@ let bombs = []; // Active bombs
 let explosions = []; // Active explosions
 let indestructibleWalls = []; // Permanent walls
 let destructibleWalls = []; // Destructible walls
+let lavaTiles = []; // Lava hazards
 let winnerId = null;
 let winnerDetectedTime = null;
 let winDelaySeconds = 3;
@@ -56,6 +57,7 @@ let nextCharacterIndex = 0;
 let boxSprite = null; // Destructible wall
 let wallCenterSprite = null; // Indestructible wall
 let bombSprite = null; // Bomb
+let lavaSprite = null; // Lava tiles
 
 // Floor assets
 let floorImages = [];
@@ -77,9 +79,10 @@ function preload() {
     }
 
     // Load wall and bomb sprites
-    boxSprite = loadImage('bomberman-assets/box.png');
-    wallCenterSprite = loadImage('bomberman-assets/wall_center.png');
+    boxSprite = loadImage('bomberman-assets/box.png'); // Destructible walls
+    wallCenterSprite = loadImage('bomberman-assets/wall_center.png'); // Indestructible walls
     bombSprite = loadImage('bomberman-assets/weapon_bomb.png');
+    lavaSprite = loadImage('bomberman-assets/floor/lava.png');
 
     // Load floor sprites
     for (let i = 0; i < floorFiles.length; i++) {
@@ -89,7 +92,13 @@ function preload() {
 
 function setup() {
     const canvas = createCanvas(960, 800); // 20% wider
-    canvas.parent('game-container');
+    // Find the wrapper div that contains the canvas and active-bombs-display
+    const canvasWrapper = document.querySelector('#game-container > div:first-child');
+    if (canvasWrapper) {
+        canvas.parent(canvasWrapper);
+    } else {
+        canvas.parent('game-container');
+    }
     frameRate(30);
 
     // Handle welcome modal
@@ -184,6 +193,7 @@ function startGame() {
         explosions = data.gameState.explosions || [];
         indestructibleWalls = data.gameState.indestructibleWalls || [];
         destructibleWalls = data.gameState.destructibleWalls || [];
+        lavaTiles = data.gameState.lavaTiles || [];
 
         // Set canvas size from server
         if (data.gameState.width && data.gameState.height) {
@@ -255,6 +265,7 @@ function startGame() {
         explosions = state.explosions || [];
         indestructibleWalls = state.indestructibleWalls || [];
         destructibleWalls = state.destructibleWalls || [];
+        lavaTiles = state.lavaTiles || [];
 
         // Update canvas size if grid dimensions changed
         if (state.width && state.height) {
@@ -405,6 +416,9 @@ function draw() {
     // Draw walls
     drawWalls();
 
+    // Draw lava tiles
+    drawLavaTiles();
+
     // Draw bomb pickups
     drawBombPickups();
 
@@ -498,6 +512,19 @@ function drawWalls() {
     }
 }
 
+function drawLavaTiles() {
+    lavaTiles.forEach(lava => {
+        if (lavaSprite) {
+            image(lavaSprite, lava.x, lava.y, scl, scl);
+        } else {
+            // Fallback: orange-red square
+            fill(255, 69, 0);
+            noStroke();
+            rect(lava.x, lava.y, scl, scl);
+        }
+    });
+}
+
 function drawBombPickups() {
     fill(255, 215, 0); // Gold
     noStroke();
@@ -550,6 +577,17 @@ function drawPowerups() {
             textSize(20);
             textAlign(CENTER, CENTER);
             text("I", powerup.x + scl/2, powerup.y + scl/2);
+        } else if (powerup.type === 'life') {
+            // Draw life powerup as a pink/red circle (heart color)
+            fill(255, 20, 147); // Deep pink
+            noStroke();
+            ellipse(powerup.x + scl/2, powerup.y + scl/2, scl * 0.6, scl * 0.6);
+
+            // Draw a life symbol (heart/L)
+            fill(255, 255, 255); // White text
+            textSize(20);
+            textAlign(CENTER, CENTER);
+            text("♥", powerup.x + scl/2, powerup.y + scl/2);
         }
     });
 }
@@ -594,9 +632,9 @@ function updateAvatarDisplay() {
         const ctx = avatarCanvas.getContext('2d');
         // Clear the canvas
         ctx.clearRect(0, 0, avatarCanvas.width, avatarCanvas.height);
-        // Draw the character sprite scaled to 64x64
+        // Draw the character sprite scaled to 32x32
         ctx.imageSmoothingEnabled = false; // Pixelated rendering
-        ctx.drawImage(sprite.canvas, 0, 0, 64, 64);
+        ctx.drawImage(sprite.canvas, 0, 0, 32, 32);
         // Show the avatar display
         yourColorDiv.style.display = 'block';
     }
@@ -664,12 +702,28 @@ function drawPlayers() {
         const characterIndex = playerCharacterMap.get(id);
         const sprite = characterSprites[characterIndex];
 
+        // Check for spawn protection
+        const isProtected = player.protectedUntil && player.protectedUntil > now;
+        const shouldBlink = isProtected && Math.floor(now / 200) % 2 === 0;
+
         if (sprite) {
             // Draw character sprite (16x16 scaled to 32x32)
+            if (shouldBlink) {
+                tint(255, 255, 255, 128); // 50% transparency for blink
+            }
             image(sprite, player.renderX, player.renderY, scl, scl);
+            noTint();
         } else {
             // Fallback: Draw player as a colored square
-            fill(player.color);
+            if (shouldBlink) {
+                // Extract RGB and add alpha for blinking
+                const r = red(player.color);
+                const g = green(player.color);
+                const b = blue(player.color);
+                fill(r, g, b, 128);
+            } else {
+                fill(player.color);
+            }
             noStroke();
             rect(player.renderX, player.renderY, scl, scl);
 
@@ -677,6 +731,15 @@ function drawPlayers() {
             fill(255);
             ellipse(player.renderX + scl * 0.35, player.renderY + scl * 0.35, scl * 0.15, scl * 0.15);
             ellipse(player.renderX + scl * 0.65, player.renderY + scl * 0.35, scl * 0.15, scl * 0.15);
+        }
+
+        // Draw shield indicator for protected players
+        if (isProtected) {
+            noFill();
+            stroke(100, 200, 255, 180);
+            strokeWeight(2);
+            ellipse(player.renderX + scl/2, player.renderY + scl/2, scl * 1.2, scl * 1.2);
+            noStroke();
         }
     });
 }
@@ -702,11 +765,87 @@ function drawUI() {
             invisibilityStatus.style.display = 'none';
         }
     }
+
+    // Update lives status (always visible)
+    const livesCount = document.getElementById('lives-count');
+    if (livesCount && players.has(playerId)) {
+        const myPlayer = players.get(playerId);
+        const lives = myPlayer.lives || 0;
+        livesCount.textContent = lives;
+    }
+
+    // Update active bombs display (only when player is dead)
+    updateActiveBombsDisplay();
+}
+
+function updateActiveBombsDisplay() {
+    const activeBombsDisplay = document.getElementById('active-bombs-display');
+    const activeBombsList = document.getElementById('active-bombs-list');
+
+    if (!activeBombsDisplay || !activeBombsList || !players.has(playerId)) return;
+
+    const myPlayer = players.get(playerId);
+
+    // Only show when player is dead
+    if (!myPlayer || myPlayer.alive) {
+        activeBombsDisplay.style.display = 'none';
+        return;
+    }
+
+    // Show the display
+    activeBombsDisplay.style.display = 'block';
+
+    // Count active bombs per player
+    const bombCounts = new Map();
+    bombs.forEach(bomb => {
+        const count = bombCounts.get(bomb.playerId) || 0;
+        bombCounts.set(bomb.playerId, count + 1);
+    });
+
+    // Build the display
+    let html = '';
+    bombCounts.forEach((count, playerIdKey) => {
+        const player = players.get(playerIdKey);
+        if (player) {
+            const displayName = player.playerName || `Player ${playerIdKey.substring(0, 6)}...`;
+            const characterIndex = playerCharacterMap.get(playerIdKey);
+            const sprite = characterSprites[characterIndex];
+
+            html += `<div style="background-color: #333; padding: 5px 8px; border-radius: 3px; display: flex; align-items: center; gap: 6px;">`;
+
+            // Add character sprite if available
+            if (sprite) {
+                html += `<canvas id="bomb-avatar-${playerIdKey}" width="16" height="16" style="image-rendering: pixelated;"></canvas>`;
+            }
+
+            html += `<span style="color: #fff;">${displayName}:</span>`;
+            html += `<span style="color: #FFD700; font-weight: bold;">${count} 💣</span>`;
+            html += `</div>`;
+        }
+    });
+
+    activeBombsList.innerHTML = html;
+
+    // Draw character sprites onto the canvases
+    bombCounts.forEach((count, playerIdKey) => {
+        const characterIndex = playerCharacterMap.get(playerIdKey);
+        const sprite = characterSprites[characterIndex];
+        const canvas = document.getElementById(`bomb-avatar-${playerIdKey}`);
+
+        if (sprite && canvas) {
+            const ctx = canvas.getContext('2d');
+            ctx.clearRect(0, 0, 16, 16);
+            ctx.imageSmoothingEnabled = false;
+            ctx.drawImage(sprite.canvas, 0, 0, 16, 16);
+        }
+    });
 }
 
 function drawWinnerMessage() {
     const winner = players.get(winnerId);
-    const winnerName = winnerId === playerId ? "You" : `Player ${winnerId.substring(0, 6)}...`;
+    const winnerName = winnerId === playerId
+        ? "You"
+        : (winner && winner.playerName ? winner.playerName : `Player ${winnerId.substring(0, 6)}...`);
     const message = winner ? `${winnerName} wins!` : "Game Over!";
 
     fill(0, 0, 0, 150);

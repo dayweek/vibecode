@@ -21,6 +21,7 @@ class BombermanGame {
             explosions: [],
             indestructibleWalls: [], // Permanent walls
             destructibleWalls: [], // Walls that can be destroyed
+            lavaTiles: [], // Permanent lava hazards spawned from destroyed walls
             width: 1024,
             height: 864,
             scale: 32,
@@ -40,7 +41,10 @@ class BombermanGame {
             flamePowerupChance: 0.25, // 25% chance to spawn flame powerup when wall destroyed
             speedPowerupChance: 0.25, // 25% chance to spawn speed powerup when wall destroyed
             invisibilityPowerupChance: 0.05, // 5% chance to spawn invisibility powerup (rare)
+            lifePowerupChance: 0.05, // 5% chance to spawn life powerup (rare - protects from 1 explosion)
             invisibilityDuration: 10000, // 10 seconds
+            lavaTileSpawnRate: 0.15, // 15% chance to spawn lava when wall destroyed
+            lavaWallReplacementRate: 0.05, // 5% of indestructible walls become lava
             maxSpeedBoosts: 5, // Maximum speed boosts a player can collect
             maxPlayers: 20 // Maximum expected players for full-size grid
         };
@@ -104,6 +108,7 @@ class BombermanGame {
             this.gameState.explosions = [];
             this.gameState.bombPickups = [];
             this.gameState.powerups = [];
+            this.gameState.lavaTiles = [];
 
             return true; // Grid was resized
         }
@@ -180,10 +185,18 @@ class BombermanGame {
                 if (row % 2 === 0 && col % 2 === 0) {
                     // Don't place indestructible walls on edges to ensure border accessibility
                     if (row > 0 && row < rows - 1 && col > 0 && col < cols - 1) {
-                        this.gameState.indestructibleWalls.push({
-                            x: col * scale,
-                            y: row * scale
-                        });
+                        // 5% chance to place lava instead of indestructible wall
+                        if (Math.random() < this.gameState.lavaWallReplacementRate) {
+                            this.gameState.lavaTiles.push({
+                                x: col * scale,
+                                y: row * scale
+                            });
+                        } else {
+                            this.gameState.indestructibleWalls.push({
+                                x: col * scale,
+                                y: row * scale
+                            });
+                        }
                     }
                 }
             }
@@ -198,21 +211,33 @@ class BombermanGame {
             // Top pocket walls (skip middle spawn point area)
             if (col < Math.floor(cols / 2) - 2 || col > Math.floor(cols / 2) + 2) {
                 if (!isInSafeZone(col, 2)) {
-                    this.gameState.destructibleWalls.push({
-                        x: col * scale,
-                        y: 2 * scale,
-                        hasHiddenBomb: false
-                    });
+                    // Check if there's already an indestructible wall at this position
+                    const hasIndestructible = this.gameState.indestructibleWalls.some(
+                        w => w.x === col * scale && w.y === 2 * scale
+                    );
+                    if (!hasIndestructible) {
+                        this.gameState.destructibleWalls.push({
+                            x: col * scale,
+                            y: 2 * scale,
+                            hasHiddenBomb: false
+                        });
+                    }
                 }
             }
             // Bottom pocket walls (skip middle spawn point area)
             if (col < Math.floor(cols / 2) - 2 || col > Math.floor(cols / 2) + 2) {
                 if (!isInSafeZone(col, rows - 3)) {
-                    this.gameState.destructibleWalls.push({
-                        x: col * scale,
-                        y: (rows - 3) * scale,
-                        hasHiddenBomb: false
-                    });
+                    // Check if there's already an indestructible wall at this position
+                    const hasIndestructible = this.gameState.indestructibleWalls.some(
+                        w => w.x === col * scale && w.y === (rows - 3) * scale
+                    );
+                    if (!hasIndestructible) {
+                        this.gameState.destructibleWalls.push({
+                            x: col * scale,
+                            y: (rows - 3) * scale,
+                            hasHiddenBomb: false
+                        });
+                    }
                 }
             }
         }
@@ -222,21 +247,33 @@ class BombermanGame {
             // Left pocket walls (skip middle spawn point area)
             if (row < Math.floor(rows / 2) - 2 || row > Math.floor(rows / 2) + 2) {
                 if (!isInSafeZone(2, row)) {
-                    this.gameState.destructibleWalls.push({
-                        x: 2 * scale,
-                        y: row * scale,
-                        hasHiddenBomb: false
-                    });
+                    // Check if there's already an indestructible wall at this position
+                    const hasIndestructible = this.gameState.indestructibleWalls.some(
+                        w => w.x === 2 * scale && w.y === row * scale
+                    );
+                    if (!hasIndestructible) {
+                        this.gameState.destructibleWalls.push({
+                            x: 2 * scale,
+                            y: row * scale,
+                            hasHiddenBomb: false
+                        });
+                    }
                 }
             }
             // Right pocket walls (skip middle spawn point area)
             if (row < Math.floor(rows / 2) - 2 || row > Math.floor(rows / 2) + 2) {
                 if (!isInSafeZone(cols - 3, row)) {
-                    this.gameState.destructibleWalls.push({
-                        x: (cols - 3) * scale,
-                        y: row * scale,
-                        hasHiddenBomb: false
-                    });
+                    // Check if there's already an indestructible wall at this position
+                    const hasIndestructible = this.gameState.indestructibleWalls.some(
+                        w => w.x === (cols - 3) * scale && w.y === row * scale
+                    );
+                    if (!hasIndestructible) {
+                        this.gameState.destructibleWalls.push({
+                            x: (cols - 3) * scale,
+                            y: row * scale,
+                            hasHiddenBomb: false
+                        });
+                    }
                 }
             }
         }
@@ -359,6 +396,11 @@ class BombermanGame {
                 occupied = true;
             }
 
+            // Check if position has a lava tile
+            if (!occupied && this.gameState.lavaTiles.some(l => l.x === x && l.y === y)) {
+                occupied = true;
+            }
+
             if (!occupied) {
                 return { x, y };
             }
@@ -443,26 +485,41 @@ class BombermanGame {
                     if (wall.hasHiddenBomb) {
                         this.gameState.bombPickups.push({ x: wall.x, y: wall.y });
                     }
-                    // Random chance to spawn powerups (check in order: invisibility, flame, speed)
+                    // Random chance to spawn lava or powerups
                     else {
                         const roll = Math.random();
-                        if (roll < this.gameState.invisibilityPowerupChance) {
+
+                        // 2% chance to spawn lava tile
+                        if (roll < this.gameState.lavaTileSpawnRate) {
+                            this.gameState.lavaTiles.push({
+                                x: wall.x,
+                                y: wall.y
+                            });
+                        }
+                        // Remaining chances for powerups (check in order: invisibility, flame, speed, life)
+                        else if (roll < this.gameState.lavaTileSpawnRate + this.gameState.invisibilityPowerupChance) {
                             this.gameState.powerups.push({
                                 x: wall.x,
                                 y: wall.y,
                                 type: 'invisibility' // Makes player invisible for 10 seconds
                             });
-                        } else if (roll < this.gameState.invisibilityPowerupChance + this.gameState.flamePowerupChance) {
+                        } else if (roll < this.gameState.lavaTileSpawnRate + this.gameState.invisibilityPowerupChance + this.gameState.flamePowerupChance) {
                             this.gameState.powerups.push({
                                 x: wall.x,
                                 y: wall.y,
                                 type: 'flame' // Increases bomb explosion range
                             });
-                        } else if (roll < this.gameState.invisibilityPowerupChance + this.gameState.flamePowerupChance + this.gameState.speedPowerupChance) {
+                        } else if (roll < this.gameState.lavaTileSpawnRate + this.gameState.invisibilityPowerupChance + this.gameState.flamePowerupChance + this.gameState.speedPowerupChance) {
                             this.gameState.powerups.push({
                                 x: wall.x,
                                 y: wall.y,
                                 type: 'speed' // Increases movement speed by 10%
+                            });
+                        } else if (roll < this.gameState.lavaTileSpawnRate + this.gameState.invisibilityPowerupChance + this.gameState.flamePowerupChance + this.gameState.speedPowerupChance + this.gameState.lifePowerupChance) {
+                            this.gameState.powerups.push({
+                                x: wall.x,
+                                y: wall.y,
+                                type: 'life' // Protects from 1 explosion
                             });
                         }
                     }
@@ -508,6 +565,8 @@ class BombermanGame {
                     if (!collision && this.gameState.destructibleWalls.some(w => w.x === newX && w.y === newY)) {
                         collision = true;
                     }
+
+                    // Note: Lava tiles do NOT block movement - players can walk onto them and die
 
                     // Check collision with bombs
                     // Solid Bomb Rule: Can walk off a bomb, but cannot walk onto it
@@ -557,6 +616,9 @@ class BombermanGame {
                             } else if (powerup.type === 'invisibility') {
                                 // Activate invisibility for 10 seconds
                                 player.invisibleUntil = Date.now() + this.gameState.invisibilityDuration;
+                            } else if (powerup.type === 'life') {
+                                // Grant 1 extra life (protection from 1 explosion)
+                                player.lives++;
                             }
                             this.gameState.powerups.splice(powerupIndex, 1);
 
@@ -575,11 +637,44 @@ class BombermanGame {
         this.gameState.explosions.forEach(explosion => {
             this.gameState.players.forEach((player, playerId) => {
                 if (player.alive && player.x === explosion.x && player.y === explosion.y) {
-                    player.alive = false;
+                    // Check spawn protection
+                    if (!player.protectedUntil || Date.now() > player.protectedUntil) {
+                        // Check if player has extra lives
+                        if (player.lives > 0) {
+                            // Consume one life instead of dying
+                            player.lives--;
+                            // Grant temporary protection (2 seconds) after losing a life
+                            player.protectedUntil = Date.now() + 2000;
+                        } else {
+                            // No lives left - player dies
+                            player.alive = false;
 
-                    // Emit death sound (disabled)
-                    // const playerSocket = this.io.of('/bomberman').sockets.get(playerId);
-                    // if (playerSocket) playerSocket.emit('playDieSound');
+                            // Emit death sound (disabled)
+                            // const playerSocket = this.io.of('/bomberman').sockets.get(playerId);
+                            // if (playerSocket) playerSocket.emit('playDieSound');
+                        }
+                    }
+                }
+            });
+        });
+
+        // Check for player deaths from lava tiles
+        this.gameState.lavaTiles.forEach(lava => {
+            this.gameState.players.forEach((player, playerId) => {
+                if (player.alive && player.x === lava.x && player.y === lava.y) {
+                    // Check spawn protection
+                    if (!player.protectedUntil || Date.now() > player.protectedUntil) {
+                        // Check if player has extra lives
+                        if (player.lives > 0) {
+                            // Consume one life instead of dying
+                            player.lives--;
+                            // Grant temporary protection (2 seconds) after losing a life
+                            player.protectedUntil = Date.now() + 2000;
+                        } else {
+                            // No lives left - player dies
+                            player.alive = false;
+                        }
+                    }
                 }
             });
         });
@@ -661,6 +756,14 @@ class BombermanGame {
                     break; // Stop this direction
                 }
 
+                // Check for lava tile - explosion stops (lava blocks explosions)
+                const hasLava = this.gameState.lavaTiles.some(
+                    l => l.x === x && l.y === y
+                );
+                if (hasLava) {
+                    break; // Stop this direction
+                }
+
                 // Check for destructible wall
                 const destructibleIndex = this.gameState.destructibleWalls.findIndex(
                     w => w.x === x && w.y === y
@@ -715,6 +818,7 @@ class BombermanGame {
         this.gameState.explosions = [];
         this.gameState.bombPickups = [];
         this.gameState.powerups = [];
+        this.gameState.lavaTiles = [];
 
         // Regenerate environment (walls)
         this.generateEnvironment();
@@ -729,6 +833,8 @@ class BombermanGame {
             player.bombRange = this.gameState.baseExplosionRange;
             player.speedBoosts = 0;
             player.invisibleUntil = 0;
+            player.protectedUntil = Date.now() + 2000;
+            player.lives = 0;
             player.alive = true;
             player.currentDirection = null;
             player.lastMoveTime = Date.now();
@@ -777,6 +883,8 @@ class BombermanGame {
                     bombRange: p.bombRange,
                     speedBoosts: p.speedBoosts,
                     invisibleUntil: p.invisibleUntil,
+                    protectedUntil: p.protectedUntil || 0,
+                    lives: p.lives || 0,
                     alive: p.alive,
                     lastMoveTime: p.lastMoveTime,
                     isMoving: !!p.currentDirection
@@ -798,6 +906,7 @@ class BombermanGame {
                     x: w.x,
                     y: w.y
                 })),
+                lavaTiles: this.gameState.lavaTiles,
                 winnerId: this.gameState.winnerId,
                 width: this.gameState.width,
                 height: this.gameState.height,
@@ -898,7 +1007,8 @@ class BombermanGame {
                     const restoredPlayer = {
                         ...savedPlayer,
                         playerName: playerName || savedPlayer.playerName || '',
-                        lastActivityTime: Date.now()
+                        lastActivityTime: Date.now(),
+                        protectedUntil: Date.now() + 2000
                     };
 
                     this.gameState.players.set(socket.id, restoredPlayer);
@@ -924,6 +1034,8 @@ class BombermanGame {
                         bombRange: 1,
                         speedBoosts: 0,
                         invisibleUntil: 0,
+                        protectedUntil: Date.now() + 2000,
+                        lives: 0,
                         alive: true,
                         lastMoveTime: Date.now(),
                         lastActivityTime: Date.now(),
@@ -953,6 +1065,8 @@ class BombermanGame {
                             bombRange: player.bombRange,
                             speedBoosts: player.speedBoosts,
                             invisibleUntil: player.invisibleUntil,
+                            protectedUntil: player.protectedUntil || 0,
+                            lives: player.lives || 0,
                             alive: player.alive
                         })),
                         bombPickups: this.gameState.bombPickups,
@@ -961,6 +1075,7 @@ class BombermanGame {
                         explosions: this.gameState.explosions,
                         indestructibleWalls: this.gameState.indestructibleWalls,
                         destructibleWalls: this.gameState.destructibleWalls.map(w => ({ x: w.x, y: w.y })),
+                        lavaTiles: this.gameState.lavaTiles,
                         width: this.gameState.width,
                         height: this.gameState.height
                     }
@@ -1074,6 +1189,8 @@ class BombermanGame {
                     playerToKeep.bombRange = 1;
                     playerToKeep.speedBoosts = 0;
                     playerToKeep.invisibleUntil = 0;
+                    playerToKeep.protectedUntil = Date.now() + 2000;
+                    playerToKeep.lives = 0;
                     playerToKeep.alive = true;
                     playerToKeep.currentDirection = null;
                     playerToKeep.lastMoveTime = Date.now();
@@ -1107,6 +1224,7 @@ class BombermanGame {
                     this.gameState.explosions = [];
                     this.gameState.bombPickups = [];
                     this.gameState.powerups = [];
+                    this.gameState.lavaTiles = [];
 
                     // Reset all players
                     this.gameState.players.forEach((player) => {
@@ -1118,6 +1236,8 @@ class BombermanGame {
                         player.bombRange = 1;
                         player.speedBoosts = 0;
                         player.invisibleUntil = 0;
+                        player.protectedUntil = Date.now() + 2000;
+                        player.lives = 0;
                         player.alive = true;
                         player.currentDirection = null;
                         player.lastMoveTime = Date.now();

@@ -31,29 +31,29 @@
         #left-panel {
             display: flex;
             flex-direction: column;
-            gap: 15px;
-            padding-top: 10px;
+            gap: 8px;
+            padding-top: 5px;
             width: 80px;
         }
         #controls {
             display: flex;
             flex-direction: column;
-            gap: 8px;
+            gap: 5px;
         }
         #game-stats {
             background-color: #2a2a2a;
-            padding: 8px 10px;
+            padding: 5px 8px;
             border-radius: 5px;
             border: 2px solid #333;
         }
         #game-stats h3 {
-            margin: 0 0 5px 0;
-            font-size: 12px;
+            margin: 0 0 3px 0;
+            font-size: 11px;
             font-weight: normal;
             color: #999;
         }
         #players-alive {
-            font-size: 16px;
+            font-size: 14px;
             font-weight: bold;
             color: #4CAF50;
         }
@@ -61,8 +61,8 @@
             border: 2px solid #333;
         }
         button {
-            padding: 6px 10px;
-            font-size: 13px;
+            padding: 4px 8px;
+            font-size: 12px;
             cursor: pointer;
             background-color: #444;
             color: white;
@@ -115,27 +115,26 @@
         }
         #player-name-display {
             background-color: #2a2a2a;
-            padding: 8px 10px;
+            padding: 5px 8px;
             border-radius: 5px;
             border: 2px solid #333;
-            margin-bottom: 15px;
         }
         #player-name-display h3 {
-            margin: 0 0 5px 0;
-            font-size: 12px;
+            margin: 0 0 3px 0;
+            font-size: 11px;
             font-weight: normal;
             color: #999;
         }
         #player-name-text {
-            font-size: 14px;
+            font-size: 12px;
             font-weight: bold;
             color: #4CAF50;
             word-break: break-word;
-            margin-bottom: 5px;
+            margin-bottom: 3px;
         }
         #edit-name-btn {
-            padding: 4px 8px;
-            font-size: 11px;
+            padding: 3px 6px;
+            font-size: 10px;
         }
     </style>
 </head>
@@ -151,18 +150,29 @@
     </div>
 
     <div id="game-container">
+        <div style="display: flex; flex-direction: column; gap: 10px;">
+            <!-- Canvas will be inserted here by p5.js -->
+            <div id="active-bombs-display" style="background-color: #2a2a2a; padding: 10px; border-radius: 5px; border: 2px solid #333; display: none; max-width: 960px;">
+                <h3 style="margin: 0 0 8px 0; font-size: 12px; font-weight: bold; color: #999;">Active Bombs:</h3>
+                <div id="active-bombs-list" style="display: flex; flex-wrap: wrap; gap: 8px; font-size: 11px;"></div>
+            </div>
+        </div>
         <div id="left-panel">
-            <div id="your-color" style="background-color: #2a2a2a; padding: 8px 10px; border-radius: 5px; border: 2px solid #333; margin-bottom: 15px; display: none;">
-                <h3 style="margin: 0 0 8px 0; font-size: 12px; font-weight: normal; color: #999;">Your Character:</h3>
-                <canvas id="avatar-display" width="64" height="64" style="margin: 0 auto; display: block; image-rendering: pixelated; border: 2px solid #666; border-radius: 3px;"></canvas>
+            <div id="your-color" style="background-color: #2a2a2a; padding: 5px 8px; border-radius: 5px; border: 2px solid #333; display: none;">
+                <h3 style="margin: 0 0 5px 0; font-size: 11px; font-weight: normal; color: #999;">Character:</h3>
+                <canvas id="avatar-display" width="32" height="32" style="margin: 0 auto; display: block; image-rendering: pixelated; border: 2px solid #666; border-radius: 3px;"></canvas>
             </div>
             <div id="player-name-display" style="display: none;">
                 <h3>Your Name:</h3>
                 <div id="player-name-text"></div>
                 <button id="edit-name-btn">Edit Name</button>
             </div>
+            <div id="lives-status" style="background-color: #2a2a2a; padding: 5px 8px; border-radius: 5px; border: 2px solid #FF1493; text-align: center;">
+                <h3 style="margin: 0 0 3px 0; font-size: 11px; font-weight: normal; color: #999;">Lives</h3>
+                <div id="lives-count" style="font-size: 14px; font-weight: bold; color: #FF69B4;">0</div>
+            </div>
             <div id="controls">
-                <button id="resetButton">Reset</button>
+                <button id="resetButton">New Game</button>
                 <button id="toggleMusicButton">Music</button>
                 <button id="toggleSoundButton">Sound</button>
             </div>
@@ -170,9 +180,9 @@
                 <h3>Players</h3>
                 <div id="players-alive">0 Alive</div>
             </div>
-            <div id="invisibility-status" style="background-color: #2a2a2a; padding: 8px 10px; border-radius: 5px; border: 2px solid #8B00FF; display: none; text-align: center;">
-                <h3 style="margin: 0 0 5px 0; font-size: 12px; font-weight: bold; color: #8B00FF;">Invisibility</h3>
-                <div id="invisibility-text" style="font-size: 11px; color: #BB88FF;">Activated</div>
+            <div id="invisibility-status" style="background-color: #2a2a2a; padding: 5px 8px; border-radius: 5px; border: 2px solid #8B00FF; display: none; text-align: center;">
+                <h3 style="margin: 0 0 3px 0; font-size: 11px; font-weight: bold; color: #8B00FF;">Invisible</h3>
+                <div id="invisibility-text" style="font-size: 10px; color: #BB88FF;">Active</div>
             </div>
         </div>
     </div>
