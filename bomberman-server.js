@@ -771,6 +771,7 @@ class BombermanGame {
                     x: p.x,
                     y: p.y,
                     color: p.color,
+                    playerName: p.playerName || '',
                     maxBombs: p.maxBombs,
                     activeBombs: p.activeBombs,
                     bombRange: p.bombRange,
@@ -874,10 +875,14 @@ class BombermanGame {
             let playerCreated = false;
 
             // Handle reconnection
-            socket.on('reconnect_player', (persistentId) => {
+            socket.on('reconnect_player', (data) => {
                 if (playerCreated) return; // Already created player for this socket
 
-                console.log(`Reconnect request from ${socket.id} with persistentId: ${persistentId}`);
+                // Handle both old format (string) and new format (object)
+                const persistentId = typeof data === 'string' ? data : data.persistentId;
+                const playerName = typeof data === 'object' ? data.playerName : '';
+
+                console.log(`Reconnect request from ${socket.id} with persistentId: ${persistentId}, name: ${playerName}`);
 
                 // Check if we have saved data for this persistent ID
                 const savedPlayer = this.persistentPlayers.get(persistentId);
@@ -889,9 +894,10 @@ class BombermanGame {
                     // Update the socket mapping
                     this.socketToPersistentId.set(socket.id, persistentId);
 
-                    // Restore player with new socket ID
+                    // Restore player with new socket ID and update name if provided
                     const restoredPlayer = {
                         ...savedPlayer,
+                        playerName: playerName || savedPlayer.playerName || '',
                         lastActivityTime: Date.now()
                     };
 
@@ -912,6 +918,7 @@ class BombermanGame {
                         x: pos.x,
                         y: pos.y,
                         color: color,
+                        playerName: playerName || '',
                         maxBombs: 1,
                         activeBombs: 0,
                         bombRange: 1,
@@ -940,6 +947,7 @@ class BombermanGame {
                             x: player.x,
                             y: player.y,
                             color: player.color,
+                            playerName: player.playerName || '',
                             maxBombs: player.maxBombs,
                             activeBombs: player.activeBombs,
                             bombRange: player.bombRange,
@@ -1015,6 +1023,21 @@ class BombermanGame {
 
                         player.activeBombs++; // Increment active bomb count
                         player.lastBombPlacedTime = Date.now(); // Track when bomb was placed
+                    }
+                }
+            });
+
+            // Handle player name update
+            socket.on('update_player_name', (newName) => {
+                const player = this.gameState.players.get(socket.id);
+                if (player) {
+                    player.playerName = newName || '';
+                    console.log(`Player ${socket.id} updated name to: ${newName}`);
+
+                    // Update persistent storage
+                    const persistentId = this.socketToPersistentId.get(socket.id);
+                    if (persistentId) {
+                        this.persistentPlayers.set(persistentId, { ...player });
                     }
                 }
             });

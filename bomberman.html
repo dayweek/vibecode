@@ -73,14 +73,93 @@
         button:hover {
             background-color: #555;
         }
+        #welcome-modal {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0, 0, 0, 0.9);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            z-index: 1000;
+        }
+        #welcome-content {
+            background-color: #2a2a2a;
+            padding: 30px;
+            border-radius: 10px;
+            border: 2px solid #666;
+            text-align: center;
+            max-width: 400px;
+        }
+        #welcome-content h2 {
+            margin: 0 0 20px 0;
+            color: #4CAF50;
+        }
+        #welcome-content input {
+            width: 100%;
+            padding: 10px;
+            font-size: 16px;
+            border: 2px solid #666;
+            border-radius: 5px;
+            background-color: #333;
+            color: white;
+            margin-bottom: 15px;
+            box-sizing: border-box;
+        }
+        #welcome-content button {
+            width: 100%;
+            padding: 12px;
+            font-size: 16px;
+        }
+        #player-name-display {
+            background-color: #2a2a2a;
+            padding: 8px 10px;
+            border-radius: 5px;
+            border: 2px solid #333;
+            margin-bottom: 15px;
+        }
+        #player-name-display h3 {
+            margin: 0 0 5px 0;
+            font-size: 12px;
+            font-weight: normal;
+            color: #999;
+        }
+        #player-name-text {
+            font-size: 14px;
+            font-weight: bold;
+            color: #4CAF50;
+            word-break: break-word;
+            margin-bottom: 5px;
+        }
+        #edit-name-btn {
+            padding: 4px 8px;
+            font-size: 11px;
+        }
     </style>
 </head>
 <body>
+    <!-- Welcome Modal -->
+    <div id="welcome-modal">
+        <div id="welcome-content">
+            <h2>Welcome to Bomberman!</h2>
+            <p>Enter your name to start playing:</p>
+            <input type="text" id="name-input" placeholder="Your Name" maxlength="20" autofocus>
+            <button id="start-game-btn">Start Game</button>
+        </div>
+    </div>
+
     <div id="game-container">
         <div id="left-panel">
             <div id="your-color" style="background-color: #2a2a2a; padding: 8px 10px; border-radius: 5px; border: 2px solid #333; margin-bottom: 15px; display: none;">
                 <h3 style="margin: 0 0 8px 0; font-size: 12px; font-weight: normal; color: #999;">Your Character:</h3>
                 <canvas id="avatar-display" width="64" height="64" style="margin: 0 auto; display: block; image-rendering: pixelated; border: 2px solid #666; border-radius: 3px;"></canvas>
+            </div>
+            <div id="player-name-display" style="display: none;">
+                <h3>Your Name:</h3>
+                <div id="player-name-text"></div>
+                <button id="edit-name-btn">Edit Name</button>
             </div>
             <div id="controls">
                 <button id="resetButton">Reset</button>

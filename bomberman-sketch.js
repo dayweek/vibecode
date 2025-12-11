@@ -17,8 +17,11 @@ let directionKeys = []; // Track order of pressed direction keys
 // Variable for player color
 let myColor = null;
 
-// Sound effects toggle
-let isSoundEnabled = true; // Sound on by default
+// Sound effects toggle - load from localStorage or default to true
+let isSoundEnabled = localStorage.getItem('bomberman_sound_enabled') !== 'false'; // Sound on by default
+
+// Player name
+let playerName = localStorage.getItem('bomberman_player_name') || '';
 
 // Player character sprites
 let characterSprites = [];
@@ -89,6 +92,42 @@ function setup() {
     canvas.parent('game-container');
     frameRate(30);
 
+    // Handle welcome modal
+    const welcomeModal = document.getElementById('welcome-modal');
+    const nameInput = document.getElementById('name-input');
+    const startGameBtn = document.getElementById('start-game-btn');
+
+    // If player already has a name, hide welcome modal and start game
+    if (playerName) {
+        welcomeModal.style.display = 'none';
+        startGame();
+    } else {
+        // Show welcome modal and wait for name input
+        nameInput.value = '';
+
+        const startGameHandler = () => {
+            const inputName = nameInput.value.trim();
+            if (inputName) {
+                playerName = inputName;
+                localStorage.setItem('bomberman_player_name', playerName);
+                welcomeModal.style.display = 'none';
+                startGame();
+            }
+        };
+
+        startGameBtn.addEventListener('click', startGameHandler);
+        nameInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                startGameHandler();
+            }
+        });
+    }
+}
+
+function startGame() {
+    // Update name display
+    updateNameDisplay();
+
     // Connect to Socket.io server
     socket = io('/bomberman');
 
@@ -104,8 +143,8 @@ function setup() {
             localStorage.setItem('bomberman_player_id', persistentId);
         }
 
-        // Send reconnect request with persistent ID
-        socket.emit('reconnect_player', persistentId);
+        // Send reconnect request with persistent ID and player name
+        socket.emit('reconnect_player', { persistentId, playerName });
 
         myColor = null;
         // Hide color display on reconnect
@@ -347,11 +386,14 @@ function setup() {
     // Sound effects toggle listener
     const toggleSoundButton = document.getElementById('toggleSoundButton');
     if (toggleSoundButton) {
-        toggleSoundButton.textContent = 'Sound On'; // Start enabled
+        // Set initial text based on loaded preference
+        toggleSoundButton.textContent = isSoundEnabled ? 'Sound On' : 'Sound Off';
 
         toggleSoundButton.addEventListener('click', () => {
             isSoundEnabled = !isSoundEnabled;
             toggleSoundButton.textContent = isSoundEnabled ? 'Sound On' : 'Sound Off';
+            // Save preference to localStorage
+            localStorage.setItem('bomberman_sound_enabled', isSoundEnabled);
         });
     }
 }
@@ -560,6 +602,35 @@ function updateAvatarDisplay() {
     }
 }
 
+function updateNameDisplay() {
+    const nameDisplay = document.getElementById('player-name-display');
+    const nameText = document.getElementById('player-name-text');
+    const editNameBtn = document.getElementById('edit-name-btn');
+
+    if (nameDisplay && nameText) {
+        nameText.textContent = playerName || 'Anonymous';
+        nameDisplay.style.display = 'block';
+
+        // Setup edit name button (only once)
+        if (editNameBtn && !editNameBtn.hasAttribute('data-listener-added')) {
+            editNameBtn.setAttribute('data-listener-added', 'true');
+            editNameBtn.addEventListener('click', () => {
+                const newName = prompt('Enter your new name:', playerName);
+                if (newName && newName.trim()) {
+                    playerName = newName.trim();
+                    localStorage.setItem('bomberman_player_name', playerName);
+                    nameText.textContent = playerName;
+
+                    // Send updated name to server
+                    if (socket && socket.connected) {
+                        socket.emit('update_player_name', playerName);
+                    }
+                }
+            });
+        }
+    }
+}
+
 function drawPlayers() {
     const now = Date.now();
     const animationDuration = serverMoveInterval; // Match server's move interval (150ms)
@@ -662,8 +733,18 @@ function drawWinnerMessage() {
 }
 
 function keyPressed() {
-    // Prevent default for arrow keys to disable scrolling
-    if ([UP_ARROW, DOWN_ARROW, LEFT_ARROW, RIGHT_ARROW, 32].includes(keyCode)) {
+    // Don't handle game controls if welcome modal is visible or if typing in input
+    const welcomeModal = document.getElementById('welcome-modal');
+    if (welcomeModal && welcomeModal.style.display !== 'none') {
+        return true; // Allow normal keyboard input in modal
+    }
+    if (document.activeElement && (document.activeElement.tagName === 'INPUT' || document.activeElement.tagName === 'TEXTAREA')) {
+        return true; // Allow typing in input fields
+    }
+
+    // Prevent default for arrow keys and WASD to disable scrolling
+    // Using keyCodes for WASD: W=87, A=65, S=83, D=68 (physical position, ignores layout)
+    if ([UP_ARROW, DOWN_ARROW, LEFT_ARROW, RIGHT_ARROW, 32, 87, 65, 83, 68].includes(keyCode)) {
         event.preventDefault();
     }
 
@@ -695,15 +776,15 @@ function keyPressed() {
         return false;
     }
 
-    // Movement with arrow keys
+    // Movement with arrow keys and WASD (using keyCodes for layout independence)
     let direction = null;
-    if (keyCode === UP_ARROW) {
+    if (keyCode === UP_ARROW || keyCode === 87) { // UP or W
         direction = { x: 0, y: -1 };
-    } else if (keyCode === DOWN_ARROW) {
+    } else if (keyCode === DOWN_ARROW || keyCode === 83) { // DOWN or S
         direction = { x: 0, y: 1 };
-    } else if (keyCode === LEFT_ARROW) {
+    } else if (keyCode === LEFT_ARROW || keyCode === 65) { // LEFT or A
         direction = { x: -1, y: 0 };
-    } else if (keyCode === RIGHT_ARROW) {
+    } else if (keyCode === RIGHT_ARROW || keyCode === 68) { // RIGHT or D
         direction = { x: 1, y: 0 };
     }
 
@@ -721,8 +802,17 @@ function keyPressed() {
 }
 
 function keyReleased() {
-    // Prevent default for arrow keys
-    if ([UP_ARROW, DOWN_ARROW, LEFT_ARROW, RIGHT_ARROW, 32].includes(keyCode)) {
+    // Don't handle game controls if welcome modal is visible or if typing in input
+    const welcomeModal = document.getElementById('welcome-modal');
+    if (welcomeModal && welcomeModal.style.display !== 'none') {
+        return true; // Allow normal keyboard input in modal
+    }
+    if (document.activeElement && (document.activeElement.tagName === 'INPUT' || document.activeElement.tagName === 'TEXTAREA')) {
+        return true; // Allow typing in input fields
+    }
+
+    // Prevent default for arrow keys and WASD
+    if ([UP_ARROW, DOWN_ARROW, LEFT_ARROW, RIGHT_ARROW, 32, 87, 65, 83, 68].includes(keyCode)) {
         event.preventDefault();
     }
 
