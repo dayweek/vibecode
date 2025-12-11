@@ -450,7 +450,7 @@ class BombermanGame {
 
             // createExplosion now returns an array of bombs hit by this explosion
             // It modifies game state (adds explosion tiles) but DOES NOT remove bombs or recurse
-            const hitBombs = this.createExplosion(bomb.x, bomb.y, wallsToDestroy, range);
+            const hitBombs = this.createExplosion(bomb.x, bomb.y, wallsToDestroy, range, bomb.playerId);
             
             hitBombs.forEach(hitBomb => {
                 if (!bombsToExplode.has(hitBomb)) {
@@ -649,6 +649,13 @@ class BombermanGame {
                             // No lives left - player dies
                             player.alive = false;
 
+                            // Track who killed this player
+                            if (explosion.playerId === playerId) {
+                                player.killedBy = 'self'; // Killed by own bomb
+                            } else {
+                                player.killedBy = explosion.playerId; // Killed by another player
+                            }
+
                             // Emit death sound (disabled)
                             // const playerSocket = this.io.of('/bomberman').sockets.get(playerId);
                             // if (playerSocket) playerSocket.emit('playDieSound');
@@ -673,6 +680,7 @@ class BombermanGame {
                         } else {
                             // No lives left - player dies
                             player.alive = false;
+                            player.killedBy = 'lava'; // Killed by lava
                         }
                     }
                 }
@@ -713,7 +721,7 @@ class BombermanGame {
         });
     }
 
-    createExplosion(centerX, centerY, wallsToDestroy, bombRange) {
+    createExplosion(centerX, centerY, wallsToDestroy, bombRange, playerId) {
         const explosionTiles = [];
         const scale = this.gameState.scale;
         const bombsToChainExplode = []; // Track bombs hit by this explosion
@@ -784,13 +792,14 @@ class BombermanGame {
             }
         });
 
-        // Add explosions with timestamp
+        // Add explosions with timestamp and player ID
         const now = Date.now();
         explosionTiles.forEach(tile => {
             this.gameState.explosions.push({
                 x: tile.x,
                 y: tile.y,
-                createdTime: now
+                createdTime: now,
+                playerId: playerId // Track who caused this explosion
             });
 
             // Check if there's a bomb at this explosion tile
@@ -836,6 +845,7 @@ class BombermanGame {
             player.protectedUntil = Date.now() + 2000;
             player.lives = 0;
             player.alive = true;
+            player.killedBy = null;
             player.currentDirection = null;
             player.lastMoveTime = Date.now();
             player.lastActivityTime = Date.now();
@@ -886,6 +896,7 @@ class BombermanGame {
                     protectedUntil: p.protectedUntil || 0,
                     lives: p.lives || 0,
                     alive: p.alive,
+                    killedBy: p.killedBy || null,
                     lastMoveTime: p.lastMoveTime,
                     isMoving: !!p.currentDirection
                 }));
@@ -1192,6 +1203,7 @@ class BombermanGame {
                     playerToKeep.protectedUntil = Date.now() + 2000;
                     playerToKeep.lives = 0;
                     playerToKeep.alive = true;
+                    playerToKeep.killedBy = null;
                     playerToKeep.currentDirection = null;
                     playerToKeep.lastMoveTime = Date.now();
                     playerToKeep.lastActivityTime = Date.now();
@@ -1239,6 +1251,7 @@ class BombermanGame {
                         player.protectedUntil = Date.now() + 2000;
                         player.lives = 0;
                         player.alive = true;
+                        player.killedBy = null;
                         player.currentDirection = null;
                         player.lastMoveTime = Date.now();
                         player.lastActivityTime = Date.now();

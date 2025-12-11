@@ -795,6 +795,50 @@ function updateActiveBombsDisplay() {
     // Show the display
     activeBombsDisplay.style.display = 'block';
 
+    // Build the death message
+    let html = '';
+
+    // Show who killed you
+    if (myPlayer.killedBy) {
+        if (myPlayer.killedBy === 'self') {
+            html += `<div style="background-color: #550000; padding: 8px 12px; border-radius: 5px; margin-bottom: 10px; border: 2px solid #AA0000; text-align: center;">`;
+            html += `<span style="color: #FF6666; font-weight: bold; font-size: 14px;">💥 You killed yourself!</span>`;
+            html += `</div>`;
+        } else if (myPlayer.killedBy === 'lava') {
+            html += `<div style="background-color: #552200; padding: 8px 12px; border-radius: 5px; margin-bottom: 10px; border: 2px solid #FF6600; text-align: center;">`;
+            html += `<span style="color: #FF9933; font-weight: bold; font-size: 14px;">🌋 Killed by lava!</span>`;
+            html += `</div>`;
+        } else {
+            const killer = players.get(myPlayer.killedBy);
+            if (killer) {
+                const killerName = killer.playerName || `Player ${myPlayer.killedBy.substring(0, 6)}...`;
+                const characterIndex = playerCharacterMap.get(myPlayer.killedBy);
+                const sprite = characterSprites[characterIndex];
+
+                html += `<div style="background-color: #330033; padding: 8px 12px; border-radius: 5px; margin-bottom: 10px; border: 2px solid #AA00AA; display: flex; align-items: center; gap: 8px;">`;
+
+                // Add killer's character sprite
+                if (sprite) {
+                    html += `<canvas id="killer-avatar" width="24" height="24" style="image-rendering: pixelated;"></canvas>`;
+                }
+
+                html += `<span style="color: #FF66FF; font-weight: bold; font-size: 14px;">💀 Killed by ${killerName}</span>`;
+                html += `</div>`;
+
+                // Draw killer sprite after HTML is inserted
+                setTimeout(() => {
+                    const canvas = document.getElementById('killer-avatar');
+                    if (sprite && canvas) {
+                        const ctx = canvas.getContext('2d');
+                        ctx.clearRect(0, 0, 24, 24);
+                        ctx.imageSmoothingEnabled = false;
+                        ctx.drawImage(sprite.canvas, 0, 0, 24, 24);
+                    }
+                }, 0);
+            }
+        }
+    }
+
     // Count active bombs per player
     const bombCounts = new Map();
     bombs.forEach(bomb => {
@@ -802,27 +846,34 @@ function updateActiveBombsDisplay() {
         bombCounts.set(bomb.playerId, count + 1);
     });
 
-    // Build the display
-    let html = '';
-    bombCounts.forEach((count, playerIdKey) => {
-        const player = players.get(playerIdKey);
-        if (player) {
-            const displayName = player.playerName || `Player ${playerIdKey.substring(0, 6)}...`;
-            const characterIndex = playerCharacterMap.get(playerIdKey);
-            const sprite = characterSprites[characterIndex];
+    // Show active bombs if any
+    if (bombCounts.size > 0) {
+        html += `<div style="margin-top: 10px; padding-top: 10px; border-top: 1px solid #444;">`;
+        html += `<div style="color: #999; font-size: 11px; margin-bottom: 5px;">Active Bombs:</div>`;
+        html += `<div style="display: flex; flex-wrap: wrap; gap: 8px;">`;
 
-            html += `<div style="background-color: #333; padding: 5px 8px; border-radius: 3px; display: flex; align-items: center; gap: 6px;">`;
+        bombCounts.forEach((count, playerIdKey) => {
+            const player = players.get(playerIdKey);
+            if (player) {
+                const displayName = player.playerName || `Player ${playerIdKey.substring(0, 6)}...`;
+                const characterIndex = playerCharacterMap.get(playerIdKey);
+                const sprite = characterSprites[characterIndex];
 
-            // Add character sprite if available
-            if (sprite) {
-                html += `<canvas id="bomb-avatar-${playerIdKey}" width="16" height="16" style="image-rendering: pixelated;"></canvas>`;
+                html += `<div style="background-color: #333; padding: 5px 8px; border-radius: 3px; display: flex; align-items: center; gap: 6px;">`;
+
+                // Add character sprite if available
+                if (sprite) {
+                    html += `<canvas id="bomb-avatar-${playerIdKey}" width="16" height="16" style="image-rendering: pixelated;"></canvas>`;
+                }
+
+                html += `<span style="color: #fff;">${displayName}:</span>`;
+                html += `<span style="color: #FFD700; font-weight: bold;">${count} 💣</span>`;
+                html += `</div>`;
             }
+        });
 
-            html += `<span style="color: #fff;">${displayName}:</span>`;
-            html += `<span style="color: #FFD700; font-weight: bold;">${count} 💣</span>`;
-            html += `</div>`;
-        }
-    });
+        html += `</div></div>`;
+    }
 
     activeBombsList.innerHTML = html;
 
