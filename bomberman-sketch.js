@@ -92,10 +92,10 @@ function preload() {
 
 function setup() {
     const canvas = createCanvas(960, 800); // 20% wider
-    // Find the wrapper div that contains the canvas and active-bombs-display
-    const canvasWrapper = document.querySelector('#game-container > div:first-child');
-    if (canvasWrapper) {
-        canvas.parent(canvasWrapper);
+    // Insert canvas into the canvas-container div
+    const canvasContainer = document.getElementById('canvas-container');
+    if (canvasContainer) {
+        canvas.parent(canvasContainer);
     } else {
         canvas.parent('game-container');
     }
@@ -134,6 +134,12 @@ function setup() {
 }
 
 function startGame() {
+    // Show game container
+    const gameContainer = document.getElementById('game-container');
+    if (gameContainer) {
+        gameContainer.style.display = 'flex';
+    }
+
     // Update name display
     updateNameDisplay();
 
@@ -231,6 +237,7 @@ function startGame() {
 
                 // Update other properties
                 localPlayer.color = serverPlayer.color;
+                localPlayer.playerName = serverPlayer.playerName;
                 localPlayer.alive = serverPlayer.alive;
                 localPlayer.activeBombs = serverPlayer.activeBombs;
                 localPlayer.maxBombs = serverPlayer.maxBombs;
@@ -238,6 +245,8 @@ function startGame() {
                 localPlayer.speedBoosts = serverPlayer.speedBoosts;
                 localPlayer.invisibleUntil = serverPlayer.invisibleUntil;
                 localPlayer.isMoving = serverPlayer.isMoving;
+                localPlayer.lives = serverPlayer.lives;
+                localPlayer.killedBy = serverPlayer.killedBy;
 
             } else {
                 // New player
@@ -782,7 +791,10 @@ function updateActiveBombsDisplay() {
     const activeBombsDisplay = document.getElementById('active-bombs-display');
     const activeBombsList = document.getElementById('active-bombs-list');
 
-    if (!activeBombsDisplay || !activeBombsList || !players.has(playerId)) return;
+    if (!activeBombsDisplay || !activeBombsList || !players.has(playerId)) {
+        console.log('DEBUG: Missing elements or playerId', { activeBombsDisplay: !!activeBombsDisplay, activeBombsList: !!activeBombsList, hasPlayerId: players.has(playerId) });
+        return;
+    }
 
     const myPlayer = players.get(playerId);
 
@@ -792,51 +804,57 @@ function updateActiveBombsDisplay() {
         return;
     }
 
+    console.log('DEBUG: Player is dead!', { killedBy: myPlayer.killedBy, alive: myPlayer.alive });
+
     // Show the display
     activeBombsDisplay.style.display = 'block';
+    console.log('DEBUG: Set display to block');
 
     // Build the death message
     let html = '';
 
-    // Show who killed you
-    if (myPlayer.killedBy) {
-        if (myPlayer.killedBy === 'self') {
-            html += `<div style="background-color: #550000; padding: 8px 12px; border-radius: 5px; margin-bottom: 10px; border: 2px solid #AA0000; text-align: center;">`;
-            html += `<span style="color: #FF6666; font-weight: bold; font-size: 14px;">💥 You killed yourself!</span>`;
-            html += `</div>`;
-        } else if (myPlayer.killedBy === 'lava') {
-            html += `<div style="background-color: #552200; padding: 8px 12px; border-radius: 5px; margin-bottom: 10px; border: 2px solid #FF6600; text-align: center;">`;
-            html += `<span style="color: #FF9933; font-weight: bold; font-size: 14px;">🌋 Killed by lava!</span>`;
-            html += `</div>`;
-        } else {
-            const killer = players.get(myPlayer.killedBy);
-            if (killer) {
-                const killerName = killer.playerName || `Player ${myPlayer.killedBy.substring(0, 6)}...`;
-                const characterIndex = playerCharacterMap.get(myPlayer.killedBy);
-                const sprite = characterSprites[characterIndex];
+    // Show who killed you (always show something to debug)
+    if (myPlayer.killedBy === 'self') {
+        html += `<div style="background-color: #550000; padding: 8px 12px; border-radius: 5px; margin-bottom: 10px; border: 2px solid #AA0000; text-align: center;">`;
+        html += `<span style="color: #FF6666; font-weight: bold; font-size: 14px;">💥 You killed yourself!</span>`;
+        html += `</div>`;
+    } else if (myPlayer.killedBy === 'lava') {
+        html += `<div style="background-color: #552200; padding: 8px 12px; border-radius: 5px; margin-bottom: 10px; border: 2px solid #FF6600; text-align: center;">`;
+        html += `<span style="color: #FF9933; font-weight: bold; font-size: 14px;">🌋 Killed by lava!</span>`;
+        html += `</div>`;
+    } else if (myPlayer.killedBy) {
+        const killer = players.get(myPlayer.killedBy);
+        if (killer) {
+            const killerName = killer.playerName || `Player ${myPlayer.killedBy.substring(0, 6)}...`;
+            const characterIndex = playerCharacterMap.get(myPlayer.killedBy);
+            const sprite = characterSprites[characterIndex];
 
-                html += `<div style="background-color: #330033; padding: 8px 12px; border-radius: 5px; margin-bottom: 10px; border: 2px solid #AA00AA; display: flex; align-items: center; gap: 8px;">`;
+            html += `<div style="background-color: #330033; padding: 8px 12px; border-radius: 5px; margin-bottom: 10px; border: 2px solid #AA00AA; display: flex; align-items: center; gap: 8px; justify-content: center;">`;
 
-                // Add killer's character sprite
-                if (sprite) {
-                    html += `<canvas id="killer-avatar" width="24" height="24" style="image-rendering: pixelated;"></canvas>`;
-                }
-
-                html += `<span style="color: #FF66FF; font-weight: bold; font-size: 14px;">💀 Killed by ${killerName}</span>`;
-                html += `</div>`;
-
-                // Draw killer sprite after HTML is inserted
-                setTimeout(() => {
-                    const canvas = document.getElementById('killer-avatar');
-                    if (sprite && canvas) {
-                        const ctx = canvas.getContext('2d');
-                        ctx.clearRect(0, 0, 24, 24);
-                        ctx.imageSmoothingEnabled = false;
-                        ctx.drawImage(sprite.canvas, 0, 0, 24, 24);
-                    }
-                }, 0);
+            // Add killer's character sprite
+            if (sprite) {
+                html += `<canvas id="killer-avatar" width="24" height="24" style="image-rendering: pixelated;"></canvas>`;
             }
+
+            html += `<span style="color: #FF66FF; font-weight: bold; font-size: 14px;">💀 Killed by ${killerName}</span>`;
+            html += `</div>`;
+
+            // Draw killer sprite after HTML is inserted
+            setTimeout(() => {
+                const canvas = document.getElementById('killer-avatar');
+                if (sprite && canvas) {
+                    const ctx = canvas.getContext('2d');
+                    ctx.clearRect(0, 0, 24, 24);
+                    ctx.imageSmoothingEnabled = false;
+                    ctx.drawImage(sprite.canvas, 0, 0, 24, 24);
+                }
+            }, 0);
         }
+    } else {
+        // Fallback message if killedBy is not set
+        html += `<div style="background-color: #333333; padding: 8px 12px; border-radius: 5px; margin-bottom: 10px; border: 2px solid #666666; text-align: center;">`;
+        html += `<span style="color: #FFFFFF; font-weight: bold; font-size: 14px;">☠️ You died!</span>`;
+        html += `</div>`;
     }
 
     // Count active bombs per player

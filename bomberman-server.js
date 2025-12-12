@@ -43,8 +43,8 @@ class BombermanGame {
             invisibilityPowerupChance: 0.05, // 5% chance to spawn invisibility powerup (rare)
             lifePowerupChance: 0.05, // 5% chance to spawn life powerup (rare - protects from 1 explosion)
             invisibilityDuration: 10000, // 10 seconds
-            lavaTileSpawnRate: 0.15, // 15% chance to spawn lava when wall destroyed
-            lavaWallReplacementRate: 0.05, // 5% of indestructible walls become lava
+            lavaTileSpawnRate: 0.05, // 5% chance to spawn lava when wall destroyed
+            lavaWallReplacementRate: 0.02, // 2% of indestructible walls become lava
             maxSpeedBoosts: 5, // Maximum speed boosts a player can collect
             maxPlayers: 20 // Maximum expected players for full-size grid
         };
@@ -1078,7 +1078,8 @@ class BombermanGame {
                             invisibleUntil: player.invisibleUntil,
                             protectedUntil: player.protectedUntil || 0,
                             lives: player.lives || 0,
-                            alive: player.alive
+                            alive: player.alive,
+                            killedBy: player.killedBy || null
                         })),
                         bombPickups: this.gameState.bombPickups,
                         powerups: this.gameState.powerups,

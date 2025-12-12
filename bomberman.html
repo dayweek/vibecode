@@ -9,10 +9,10 @@
     <style>
         body {
             margin: 0;
-            padding: 0;
+            padding: 20px 0 0 0;
             display: flex;
             justify-content: center;
-            align-items: center;
+            align-items: flex-start;
             min-height: 100vh;
             background-color: #1a1a1a;
             color: white;
@@ -23,7 +23,7 @@
             height: 100%;
         }
         #game-container {
-            display: flex;
+            display: none; /* Hidden until game starts */
             flex-direction: row;
             align-items: flex-start;
             gap: 20px;
@@ -59,6 +59,14 @@
         }
         canvas {
             border: 2px solid #333;
+        }
+        #canvas-container canvas {
+            max-height: 80vh;
+            width: auto;
+            height: auto;
+            image-rendering: pixelated;
+            image-rendering: -moz-crisp-edges;
+            image-rendering: crisp-edges;
         }
         button {
             padding: 4px 8px;
@@ -151,7 +159,9 @@
 
     <div id="game-container">
         <div style="display: flex; flex-direction: column; gap: 10px;">
-            <!-- Canvas will be inserted here by p5.js -->
+            <div id="canvas-container">
+                <!-- Canvas will be inserted here by p5.js -->
+            </div>
             <div id="active-bombs-display" style="background-color: #2a2a2a; padding: 10px; border-radius: 5px; border: 2px solid #333; display: none; max-width: 960px;">
                 <div id="active-bombs-list" style="font-size: 11px;"></div>
             </div>
