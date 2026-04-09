@@ -13,6 +13,23 @@ class BombermanGame {
         this.io = io;
         this.persistentPlayers = new Map(); // Map of persistentId -> player data for reconnection
         this.socketToPersistentId = new Map(); // Map of socket.id -> persistentId
+
+        // Input queues — drained at the start of each game tick to avoid race conditions
+        this.pendingDisconnects = [];
+        this.pendingBombRequests = [];
+        this.pendingMoveChanges = [];
+
+        // Spatial lookup structures for O(1) collision checks
+        this.wallLookup = new Set();           // "x,y" keys for all wall tiles (indestructible + destructible)
+        this.indestructibleLookup = new Set(); // "x,y" keys for indestructible walls only
+        this.bombLookup = new Map();           // "x,y" -> bomb object
+        this.lavaLookup = new Set();           // "x,y" keys for lava tiles
+
+        // Timeout handles for cleanup
+        this.gameLoopTimeout = null;
+        this.restartTimeout = null;
+        this.cleanupTimeouts = new Map(); // persistentId -> timeout handle
+
         this.gameState = {
             players: new Map(),
             bombPickups: [],
@@ -109,6 +126,8 @@ class BombermanGame {
             this.gameState.bombPickups = [];
             this.gameState.powerups = [];
             this.gameState.lavaTiles = [];
+            this.bombLookup.clear();
+            this.lavaLookup.clear();
 
             return true; // Grid was resized
         }
@@ -317,6 +336,24 @@ class BombermanGame {
 
         console.log(`Generated ${this.gameState.indestructibleWalls.length} indestructible walls`);
         console.log(`Generated ${this.gameState.destructibleWalls.length} destructible walls`);
+
+        // Rebuild spatial lookups
+        this.rebuildWallLookup();
+    }
+
+    rebuildWallLookup() {
+        this.wallLookup.clear();
+        this.indestructibleLookup.clear();
+        this.gameState.indestructibleWalls.forEach(w => {
+            const key = `${w.x},${w.y}`;
+            this.wallLookup.add(key);
+            this.indestructibleLookup.add(key);
+        });
+        this.gameState.destructibleWalls.forEach(w => this.wallLookup.add(`${w.x},${w.y}`));
+        this.lavaLookup.clear();
+        this.gameState.lavaTiles.forEach(l => this.lavaLookup.add(`${l.x},${l.y}`));
+        this.bombLookup.clear();
+        this.gameState.bombs.forEach(b => this.bombLookup.set(`${b.x},${b.y}`, b));
     }
 
     spawnInitialBombPickups() {
@@ -376,28 +413,19 @@ class BombermanGame {
                 }
             });
 
-            // Check if position has a bomb pickup
+            const key = `${x},${y}`;
+
+            // Use spatial lookups for O(1) checks
+            if (!occupied && this.wallLookup.has(key)) {
+                occupied = true;
+            }
+            if (!occupied && this.bombLookup.has(key)) {
+                occupied = true;
+            }
+            if (!occupied && this.lavaLookup.has(key)) {
+                occupied = true;
+            }
             if (!occupied && this.gameState.bombPickups.some(p => p.x === x && p.y === y)) {
-                occupied = true;
-            }
-
-            // Check if position has a bomb
-            if (!occupied && this.gameState.bombs.some(b => b.x === x && b.y === y)) {
-                occupied = true;
-            }
-
-            // Check if position has an indestructible wall
-            if (!occupied && this.gameState.indestructibleWalls.some(w => w.x === x && w.y === y)) {
-                occupied = true;
-            }
-
-            // Check if position has a destructible wall
-            if (!occupied && this.gameState.destructibleWalls.some(w => w.x === x && w.y === y)) {
-                occupied = true;
-            }
-
-            // Check if position has a lava tile
-            if (!occupied && this.gameState.lavaTiles.some(l => l.x === x && l.y === y)) {
                 occupied = true;
             }
 
@@ -414,6 +442,29 @@ class BombermanGame {
 
     updateGameState() {
         const now = Date.now();
+
+        // Drain pending disconnects safely before iterating players
+        while (this.pendingDisconnects.length > 0) {
+            const playerId = this.pendingDisconnects.shift();
+            this._processDisconnect(playerId);
+        }
+
+        // Drain pending move changes
+        // Only keep the last direction per player (deduplicates rapid inputs)
+        const lastMovePerPlayer = new Map();
+        while (this.pendingMoveChanges.length > 0) {
+            const change = this.pendingMoveChanges.shift();
+            lastMovePerPlayer.set(change.playerId, change.direction);
+        }
+        lastMovePerPlayer.forEach((direction, playerId) => {
+            const player = this.gameState.players.get(playerId);
+            if (player && player.alive) {
+                player.currentDirection = direction;
+                if (direction) {
+                    player.lastMoveTime = now - this.gameState.moveInterval;
+                }
+            }
+        });
 
         // Pause game logic if there's a winner
         if (this.gameState.winnerId) return;
@@ -468,6 +519,7 @@ class BombermanGame {
 
         // 3. Remove all exploded bombs from game state
         if (bombsToExplode.size > 0) {
+            bombsToExplode.forEach(bomb => this.bombLookup.delete(`${bomb.x},${bomb.y}`));
             this.gameState.bombs = this.gameState.bombs.filter(bomb => !bombsToExplode.has(bomb));
 
             // Emit explosion sound to all players (once per tick, even for chain reactions)
@@ -495,6 +547,7 @@ class BombermanGame {
                                 x: wall.x,
                                 y: wall.y
                             });
+                            this.lavaLookup.add(`${wall.x},${wall.y}`);
                         }
                         // Remaining chances for powerups (check in order: invisibility, flame, speed, life)
                         else if (roll < this.gameState.lavaTileSpawnRate + this.gameState.invisibilityPowerupChance) {
@@ -523,6 +576,7 @@ class BombermanGame {
                             });
                         }
                     }
+                    this.wallLookup.delete(key); // Update spatial lookup
                     return false; // Remove from array
                 }
                 return true; // Keep in array
@@ -534,6 +588,27 @@ class BombermanGame {
             const timeElapsed = now - explosion.createdTime;
             return timeElapsed < this.gameState.explosionDuration;
         });
+
+        // Process pending bomb placements (queued from event handlers)
+        while (this.pendingBombRequests.length > 0) {
+            const socketId = this.pendingBombRequests.shift();
+            const player = this.gameState.players.get(socketId);
+            if (player && player.alive && player.activeBombs < player.maxBombs) {
+                const key = `${player.x},${player.y}`;
+                if (!this.bombLookup.has(key)) {
+                    const bomb = {
+                        x: player.x,
+                        y: player.y,
+                        placedTime: now,
+                        playerId: socketId
+                    };
+                    this.gameState.bombs.push(bomb);
+                    this.bombLookup.set(key, bomb);
+                    player.activeBombs++;
+                    player.lastBombPlacedTime = now;
+                }
+            }
+        }
 
         // Move players
         this.gameState.players.forEach((player, playerId) => {
@@ -555,27 +630,20 @@ class BombermanGame {
                 if (newX >= 0 && newX < this.gameState.width && newY >= 0 && newY < this.gameState.height) {
                     // Players can pass through each other - no player collision check
                     let collision = false;
+                    const targetKey = `${newX},${newY}`;
 
-                    // Check collision with indestructible walls
-                    if (!collision && this.gameState.indestructibleWalls.some(w => w.x === newX && w.y === newY)) {
-                        collision = true;
-                    }
-
-                    // Check collision with destructible walls
-                    if (!collision && this.gameState.destructibleWalls.some(w => w.x === newX && w.y === newY)) {
+                    // Check collision with walls (O(1) lookup)
+                    if (this.wallLookup.has(targetKey)) {
                         collision = true;
                     }
 
                     // Note: Lava tiles do NOT block movement - players can walk onto them and die
 
-                    // Check collision with bombs
+                    // Check collision with bombs (O(1) lookup)
                     // Solid Bomb Rule: Can walk off a bomb, but cannot walk onto it
                     if (!collision) {
-                        const bombAtTarget = this.gameState.bombs.find(b => b.x === newX && b.y === newY);
+                        const bombAtTarget = this.bombLookup.get(targetKey);
                         if (bombAtTarget) {
-                            // There is a bomb at the target tile.
-                            // Only allow movement if the player is currently standing on that same bomb (walking off it).
-                            // If the player is NOT currently on that bomb, it's a collision (blocked).
                             if (player.x !== bombAtTarget.x || player.y !== bombAtTarget.y) {
                                 collision = true;
                             }
@@ -665,23 +733,13 @@ class BombermanGame {
             });
         });
 
-        // Check for player deaths from lava tiles
+        // Check for player deaths from lava tiles — lava is always instant kill
         this.gameState.lavaTiles.forEach(lava => {
             this.gameState.players.forEach((player, playerId) => {
                 if (player.alive && player.x === lava.x && player.y === lava.y) {
-                    // Check spawn protection
                     if (!player.protectedUntil || Date.now() > player.protectedUntil) {
-                        // Check if player has extra lives
-                        if (player.lives > 0) {
-                            // Consume one life instead of dying
-                            player.lives--;
-                            // Grant temporary protection (2 seconds) after losing a life
-                            player.protectedUntil = Date.now() + 2000;
-                        } else {
-                            // No lives left - player dies
-                            player.alive = false;
-                            player.killedBy = 'lava'; // Killed by lava
-                        }
+                        player.alive = false;
+                        player.killedBy = 'lava';
                     }
                 }
             });
@@ -705,8 +763,8 @@ class BombermanGame {
                 console.log('All players eliminated - Draw! Restarting game...');
                 this.gameState.winnerId = 'draw'; // Special value to indicate draw
 
-                // Auto-restart after 3 seconds
-                setTimeout(() => {
+                // Auto-restart after 3 seconds (tracked for cancellation)
+                this.restartTimeout = setTimeout(() => {
                     this.restartGame();
                 }, 3000);
             }
@@ -729,13 +787,10 @@ class BombermanGame {
         // Center tile always explodes
         explosionTiles.push({ x: centerX, y: centerY });
 
-        // Check if center destroys a destructible wall
-        // Use logic similar to checkAndDestroyWall but adding to Set
-        const centerWallIndex = this.gameState.destructibleWalls.findIndex(
-            w => w.x === centerX && w.y === centerY
-        );
-        if (centerWallIndex !== -1) {
-             wallsToDestroy.add(`${centerX},${centerY}`);
+        // Check if center destroys a destructible wall (O(1) lookup)
+        const centerKey = `${centerX},${centerY}`;
+        if (this.wallLookup.has(centerKey) && !this.indestructibleLookup.has(centerKey)) {
+            wallsToDestroy.add(centerKey);
         }
 
         // Cross pattern in 4 directions
@@ -753,38 +808,26 @@ class BombermanGame {
 
                 // Check boundaries
                 if (x < 0 || x >= this.gameState.width || y < 0 || y >= this.gameState.height) {
-                    break; // Stop this direction
+                    break;
                 }
 
-                // Check for indestructible wall - explosion stops
-                const hasIndestructible = this.gameState.indestructibleWalls.some(
-                    w => w.x === x && w.y === y
-                );
-                if (hasIndestructible) {
-                    break; // Stop this direction
+                const key = `${x},${y}`;
+
+                // Check for lava tile - explosion stops
+                if (this.lavaLookup.has(key)) {
+                    break;
                 }
 
-                // Check for lava tile - explosion stops (lava blocks explosions)
-                const hasLava = this.gameState.lavaTiles.some(
-                    l => l.x === x && l.y === y
-                );
-                if (hasLava) {
-                    break; // Stop this direction
-                }
+                // Check for walls using lookup
+                if (this.wallLookup.has(key)) {
+                    if (this.indestructibleLookup.has(key)) {
+                        break; // Stop — indestructible wall blocks
+                    }
 
-                // Check for destructible wall
-                const destructibleIndex = this.gameState.destructibleWalls.findIndex(
-                    w => w.x === x && w.y === y
-                );
-
-                if (destructibleIndex !== -1) {
-                    // Add explosion at this tile
+                    // Destructible wall — add explosion, mark for destruction, stop
                     explosionTiles.push({ x, y });
-
-                    // Mark wall for destruction
-                    wallsToDestroy.add(`${x},${y}`);
-
-                    break; // Stop this direction after hitting destructible wall
+                    wallsToDestroy.add(key);
+                    break;
                 }
 
                 // No wall, explosion continues
@@ -802,12 +845,10 @@ class BombermanGame {
                 playerId: playerId // Track who caused this explosion
             });
 
-            // Check if there's a bomb at this explosion tile
-            const bombIndex = this.gameState.bombs.findIndex(
-                b => b.x === tile.x && b.y === tile.y
-            );
-            if (bombIndex !== -1) {
-                bombsToChainExplode.push(this.gameState.bombs[bombIndex]);
+            // Check if there's a bomb at this explosion tile (O(1) lookup)
+            const bombAtTile = this.bombLookup.get(`${tile.x},${tile.y}`);
+            if (bombAtTile) {
+                bombsToChainExplode.push(bombAtTile);
             }
         });
 
@@ -819,6 +860,12 @@ class BombermanGame {
     restartGame() {
         console.log('Restarting game...');
 
+        // Clear pending restart timeout
+        if (this.restartTimeout) {
+            clearTimeout(this.restartTimeout);
+            this.restartTimeout = null;
+        }
+
         // Reset winner
         this.gameState.winnerId = null;
 
@@ -828,8 +875,10 @@ class BombermanGame {
         this.gameState.bombPickups = [];
         this.gameState.powerups = [];
         this.gameState.lavaTiles = [];
+        this.bombLookup.clear();
 
-        // Regenerate environment (walls)
+        // Resize grid if player count changed thresholds, then regenerate
+        this.updateGridSize();
         this.generateEnvironment();
 
         // Reset all players
@@ -869,70 +918,67 @@ class BombermanGame {
     broadcastGameState() {
         const now = Date.now();
 
-        // Send customized state to each player (for invisibility)
-        this.gameState.players.forEach((_, socketId) => {
-            const socket = this.io.of('/bomberman').sockets.get(socketId);
-            if (!socket) return;
+        // Snapshot players to avoid iteration issues from concurrent disconnects
+        const playerSnapshot = new Map(this.gameState.players);
 
-            // Filter players: show all players except invisible ones (unless it's the invisible player viewing)
-            const visiblePlayers = Array.from(this.gameState.players.entries())
-                .filter(([id, p]) => {
-                    // Always show yourself
-                    if (id === socketId) return true;
-                    // Show others only if they're not invisible
-                    return !p.invisibleUntil || p.invisibleUntil <= now;
-                })
-                .map(([id, p]) => ({
-                    id,
-                    x: p.x,
-                    y: p.y,
-                    color: p.color,
-                    playerName: p.playerName || '',
-                    maxBombs: p.maxBombs,
-                    activeBombs: p.activeBombs,
-                    bombRange: p.bombRange,
-                    speedBoosts: p.speedBoosts,
-                    invisibleUntil: p.invisibleUntil,
-                    protectedUntil: p.protectedUntil || 0,
-                    lives: p.lives || 0,
-                    alive: p.alive,
-                    killedBy: p.killedBy || null,
-                    lastMoveTime: p.lastMoveTime,
-                    isMoving: !!p.currentDirection
-                }));
+        // Build player list once with invisible flag — client handles visibility
+        const allPlayers = Array.from(playerSnapshot.entries()).map(([id, p]) => ({
+            id,
+            x: p.x,
+            y: p.y,
+            color: p.color,
+            playerName: p.playerName || '',
+            maxBombs: p.maxBombs,
+            activeBombs: p.activeBombs,
+            bombRange: p.bombRange,
+            speedBoosts: p.speedBoosts,
+            invisibleUntil: p.invisibleUntil,
+            protectedUntil: p.protectedUntil || 0,
+            lives: p.lives || 0,
+            alive: p.alive,
+            killedBy: p.killedBy || null,
+            lastMoveTime: p.lastMoveTime,
+            isMoving: !!p.currentDirection,
+            invisible: !!(p.invisibleUntil && p.invisibleUntil > now)
+        }));
 
-            const state = {
-                players: visiblePlayers,
-                bombPickups: this.gameState.bombPickups,
-                powerups: this.gameState.powerups,
-                bombs: this.gameState.bombs.map(bomb => ({
-                    x: bomb.x,
-                    y: bomb.y,
-                    placedTime: bomb.placedTime,
-                    fuseTime: this.gameState.bombFuseTime
-                })),
-                explosions: this.gameState.explosions,
-                indestructibleWalls: this.gameState.indestructibleWalls,
-                destructibleWalls: this.gameState.destructibleWalls.map(w => ({
-                    x: w.x,
-                    y: w.y
-                })),
-                lavaTiles: this.gameState.lavaTiles,
-                winnerId: this.gameState.winnerId,
-                width: this.gameState.width,
-                height: this.gameState.height,
-                timestamp: now
-            };
+        // Single broadcast to entire room (instead of per-player)
+        const state = {
+            players: allPlayers,
+            bombPickups: this.gameState.bombPickups,
+            powerups: this.gameState.powerups,
+            bombs: this.gameState.bombs.map(bomb => ({
+                x: bomb.x,
+                y: bomb.y,
+                placedTime: bomb.placedTime,
+                fuseTime: this.gameState.bombFuseTime
+            })),
+            explosions: this.gameState.explosions,
+            indestructibleWalls: this.gameState.indestructibleWalls,
+            destructibleWalls: this.gameState.destructibleWalls.map(w => ({
+                x: w.x,
+                y: w.y
+            })),
+            lavaTiles: this.gameState.lavaTiles,
+            winnerId: this.gameState.winnerId,
+            width: this.gameState.width,
+            height: this.gameState.height,
+            timestamp: now
+        };
 
-            socket.emit('gameState', state);
-        });
+        this.io.of('/bomberman').emit('gameState', state);
     }
 
     handleDisconnect(playerId) {
-        console.log(`Disconnecting Bomberman player ${playerId}...`);
+        console.log(`Queuing disconnect for Bomberman player ${playerId}...`);
+        if (!this.pendingDisconnects.includes(playerId)) {
+            this.pendingDisconnects.push(playerId);
+        }
+    }
+
+    _processDisconnect(playerId) {
         const player = this.gameState.players.get(playerId);
         if (player) {
-            // Save player state for reconnection
             const persistentId = this.socketToPersistentId.get(playerId);
             if (persistentId) {
                 console.log(`Saving player state for ${persistentId}`);
@@ -941,19 +987,25 @@ class BombermanGame {
                     disconnectedAt: Date.now()
                 });
 
-                // Clean up after 5 minutes
-                setTimeout(() => {
+                // Clear any existing cleanup timeout for this persistentId
+                if (this.cleanupTimeouts.has(persistentId)) {
+                    clearTimeout(this.cleanupTimeouts.get(persistentId));
+                }
+
+                // Clean up after 5 minutes (tracked for cancellation)
+                const timeoutHandle = setTimeout(() => {
                     const savedPlayer = this.persistentPlayers.get(persistentId);
                     if (savedPlayer && savedPlayer.disconnectedAt) {
                         console.log(`Removing saved state for ${persistentId} after timeout`);
                         this.persistentPlayers.delete(persistentId);
                         this.gameState.usedColors.delete(savedPlayer.color);
                     }
-                }, 5 * 60 * 1000); // 5 minutes
+                    this.cleanupTimeouts.delete(persistentId);
+                }, 5 * 60 * 1000);
+                this.cleanupTimeouts.set(persistentId, timeoutHandle);
 
                 this.socketToPersistentId.delete(playerId);
             } else {
-                // No persistent ID, release color immediately
                 this.gameState.usedColors.delete(player.color);
             }
 
@@ -963,10 +1015,14 @@ class BombermanGame {
     }
 
     startGameLoop() {
-        setInterval(() => {
+        const tick = () => {
+            const start = Date.now();
             this.updateGameState();
             this.broadcastGameState();
-        }, this.gameState.updateInterval);
+            const elapsed = Date.now() - start;
+            this.gameLoopTimeout = setTimeout(tick, Math.max(0, this.gameState.updateInterval - elapsed));
+        };
+        tick();
     }
 
     startInactivityCheck() {
@@ -980,10 +1036,10 @@ class BombermanGame {
                     if (targetSocket) {
                         targetSocket.disconnect(true);
                     }
-                    this.handleDisconnect(playerId);
+                    this.handleDisconnect(playerId); // Queues for next tick
                 }
             });
-        }, 5000); // Check every 5 seconds
+        }, 5000);
     }
 
     setupNamespace() {
@@ -1109,48 +1165,30 @@ class BombermanGame {
                 }
             }, 1000);
 
-            // Handle movement start
+            // Handle movement start — queue for game loop processing
             socket.on('moveStart', (direction) => {
                 const player = this.gameState.players.get(socket.id);
                 if (player && player.alive) {
                     player.lastActivityTime = Date.now();
-                    player.currentDirection = direction;
-                    // Reset move timer to allow immediate direction change
-                    player.lastMoveTime = Date.now() - this.gameState.moveInterval;
+                    this.pendingMoveChanges.push({ playerId: socket.id, direction });
                 }
             });
 
-            // Handle movement stop
+            // Handle movement stop — queue for game loop processing
             socket.on('moveStop', () => {
                 const player = this.gameState.players.get(socket.id);
                 if (player) {
                     player.lastActivityTime = Date.now();
-                    player.currentDirection = null;
+                    this.pendingMoveChanges.push({ playerId: socket.id, direction: null });
                 }
             });
 
-            // Handle bomb placement
+            // Handle bomb placement — queue for game loop processing
             socket.on('placeBomb', () => {
                 const player = this.gameState.players.get(socket.id);
-                if (player && player.alive && player.activeBombs < player.maxBombs) {
+                if (player && player.alive) {
                     player.lastActivityTime = Date.now();
-
-                    // Check if there's already a bomb at this position
-                    const bombExists = this.gameState.bombs.some(
-                        b => b.x === player.x && b.y === player.y
-                    );
-
-                    if (!bombExists) {
-                        this.gameState.bombs.push({
-                            x: player.x,
-                            y: player.y,
-                            placedTime: Date.now(),
-                            playerId: socket.id
-                        });
-
-                        player.activeBombs++; // Increment active bomb count
-                        player.lastBombPlacedTime = Date.now(); // Track when bomb was placed
-                    }
+                    this.pendingBombRequests.push(socket.id);
                 }
             });
 
@@ -1216,6 +1254,7 @@ class BombermanGame {
                 this.gameState.bombPickups = [];
                 this.gameState.powerups = [];
                 this.gameState.winnerId = null;
+                this.bombLookup.clear();
 
                 // Respawn initial bomb pickups
                 this.spawnInitialBombPickups();
@@ -1238,6 +1277,7 @@ class BombermanGame {
                     this.gameState.bombPickups = [];
                     this.gameState.powerups = [];
                     this.gameState.lavaTiles = [];
+                    this.bombLookup.clear();
 
                     // Reset all players
                     this.gameState.players.forEach((player) => {
@@ -1269,6 +1309,7 @@ class BombermanGame {
             socket.on('disconnect', () => {
                 console.log('Bomberman player disconnected:', socket.id);
                 this.handleDisconnect(socket.id);
+                socket.removeAllListeners();
             });
         });
     }

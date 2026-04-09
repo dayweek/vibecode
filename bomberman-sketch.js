@@ -244,6 +244,7 @@ function startGame() {
                 localPlayer.bombRange = serverPlayer.bombRange;
                 localPlayer.speedBoosts = serverPlayer.speedBoosts;
                 localPlayer.invisibleUntil = serverPlayer.invisibleUntil;
+                localPlayer.invisible = serverPlayer.invisible;
                 localPlayer.isMoving = serverPlayer.isMoving;
                 localPlayer.lives = serverPlayer.lives;
                 localPlayer.killedBy = serverPlayer.killedBy;
@@ -685,6 +686,9 @@ function drawPlayers() {
     players.forEach((player, id) => {
         if (!player || !player.alive || !player.color) return;
 
+        // Skip invisible players (unless it's the local player)
+        if (player.invisible && id !== playerId) return;
+
         // Assign character sprite to new players
         if (!playerCharacterMap.has(id)) {
             playerCharacterMap.set(id, nextCharacterIndex % characterSprites.length);
@@ -753,34 +757,52 @@ function drawPlayers() {
     });
 }
 
+// Cached DOM elements and values for drawUI (avoid querying DOM every frame)
+let _uiCache = {
+    playersAliveEl: null,
+    invisibilityEl: null,
+    livesCountEl: null,
+    lastAlive: -1,
+    lastInvisible: null,
+    lastLives: -1,
+    initialized: false
+};
+
+function _initUICache() {
+    _uiCache.playersAliveEl = document.getElementById('players-alive');
+    _uiCache.invisibilityEl = document.getElementById('invisibility-status');
+    _uiCache.livesCountEl = document.getElementById('lives-count');
+    _uiCache.initialized = true;
+}
+
 function drawUI() {
-    // Update HTML elements instead of drawing on canvas
+    if (!_uiCache.initialized) _initUICache();
+
+    // Update players alive (only when changed)
     const alivePlayers = Array.from(players.values()).filter(p => p.alive).length;
-    const playersAliveElement = document.getElementById('players-alive');
-    if (playersAliveElement) {
-        playersAliveElement.textContent = `${alivePlayers} Alive`;
+    if (_uiCache.playersAliveEl && alivePlayers !== _uiCache.lastAlive) {
+        _uiCache.lastAlive = alivePlayers;
+        _uiCache.playersAliveEl.textContent = `${alivePlayers} Alive`;
     }
 
-    // Update invisibility status
-    const invisibilityStatus = document.getElementById('invisibility-status');
-    if (invisibilityStatus && players.has(playerId)) {
+    // Update invisibility status (only when changed)
+    if (_uiCache.invisibilityEl && players.has(playerId)) {
         const myPlayer = players.get(playerId);
         const now = Date.now();
-        const isInvisible = myPlayer.invisibleUntil && myPlayer.invisibleUntil > now;
-
-        if (isInvisible) {
-            invisibilityStatus.style.display = 'block';
-        } else {
-            invisibilityStatus.style.display = 'none';
+        const isInvisible = !!(myPlayer.invisibleUntil && myPlayer.invisibleUntil > now);
+        if (isInvisible !== _uiCache.lastInvisible) {
+            _uiCache.lastInvisible = isInvisible;
+            _uiCache.invisibilityEl.style.display = isInvisible ? 'block' : 'none';
         }
     }
 
-    // Update lives status (always visible)
-    const livesCount = document.getElementById('lives-count');
-    if (livesCount && players.has(playerId)) {
-        const myPlayer = players.get(playerId);
-        const lives = myPlayer.lives || 0;
-        livesCount.textContent = lives;
+    // Update lives (only when changed)
+    if (_uiCache.livesCountEl && players.has(playerId)) {
+        const lives = players.get(playerId).lives || 0;
+        if (lives !== _uiCache.lastLives) {
+            _uiCache.lastLives = lives;
+            _uiCache.livesCountEl.textContent = lives;
+        }
     }
 
     // Update active bombs display (only when player is dead)

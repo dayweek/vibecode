@@ -7,18 +7,14 @@ let score = 0;
 let winnerId = null; // Track the winner locally
 let winnerDetectedTime = null; // Track when winner was first detected
 let winDelaySeconds = 3; // Delay in seconds before allowing restart
-let baseSpeed = 10;
-let speedIncrement = 0.5;
-let lastUpdate = 0;
-const UPDATE_INTERVAL = 50; // Update every 50ms
-let lastFrameTime = 0;
-const FRAME_INTERVAL = 1000 / baseSpeed; // Target frame interval in milliseconds
+const UPDATE_INTERVAL = 50; // Server update interval in ms
+let isDisconnected = false;
 
 function setup() {
     const canvas = createCanvas(800, 800);
     // Parent the canvas to the game-container div
-    canvas.parent('game-container'); 
-    frameRate(baseSpeed);
+    canvas.parent('game-container');
+    frameRate(30); // Smooth rendering for interpolation
     
     // Connect to Socket.io server
     socket = io();
@@ -37,10 +33,47 @@ function setup() {
     });
     
     socket.on('gameState', (state) => {
-        // Update all players
-        state.players.forEach(player => {
-            players.set(player.id, player);
+        // Update all players with interpolation data
+        const currentIds = new Set();
+        state.players.forEach(serverPlayer => {
+            currentIds.add(serverPlayer.id);
+            if (players.has(serverPlayer.id)) {
+                const local = players.get(serverPlayer.id);
+                // Track previous head position for interpolation
+                const head = serverPlayer.segments[0];
+                if (local._renderX === undefined) {
+                    local._renderX = head.x;
+                    local._renderY = head.y;
+                }
+                if (local._targetX !== head.x || local._targetY !== head.y) {
+                    local._startX = local._renderX;
+                    local._startY = local._renderY;
+                    local._targetX = head.x;
+                    local._targetY = head.y;
+                    local._moveTime = Date.now();
+                }
+                local.segments = serverPlayer.segments;
+                local.score = serverPlayer.score;
+                local.color = serverPlayer.color;
+            } else {
+                // New player — initialize interpolation state
+                const head = serverPlayer.segments[0];
+                serverPlayer._renderX = head.x;
+                serverPlayer._renderY = head.y;
+                serverPlayer._targetX = head.x;
+                serverPlayer._targetY = head.y;
+                serverPlayer._startX = head.x;
+                serverPlayer._startY = head.y;
+                serverPlayer._moveTime = Date.now();
+                players.set(serverPlayer.id, serverPlayer);
+            }
         });
+        // Remove disconnected players
+        for (const [id] of players) {
+            if (!currentIds.has(id)) {
+                players.delete(id);
+            }
+        }
         food = state.food;
         
         // Check if this is the first time we're detecting a winner
@@ -96,6 +129,15 @@ function setup() {
         }
     });
 
+    socket.on('disconnect', () => {
+        console.log('Disconnected from server');
+        isDisconnected = true;
+    });
+
+    socket.on('connect', () => {
+        isDisconnected = false;
+    });
+
     // Reset button listener
     const resetButton = document.getElementById('resetButton');
     if (resetButton) {
@@ -146,55 +188,66 @@ function setup() {
 }
 
 function draw() {
-    const currentTime = millis();
-    const deltaTime = currentTime - lastFrameTime;
-    
-    if (deltaTime >= FRAME_INTERVAL) {
-        lastFrameTime = currentTime;
-        
-        background(51);
-        
-        // Draw all players
-        players.forEach((player, id) => {
-            // Add checks to ensure player and segments exist before drawing
-            if (player && player.segments && Array.isArray(player.segments) && player.color) {
-                fill(player.color);
-                player.segments.forEach(segment => {
-                    if (segment && typeof segment.x === 'number' && typeof segment.y === 'number') {
+    background(51);
+
+    const now = Date.now();
+
+    // Draw all players with head interpolation
+    players.forEach((player, id) => {
+        if (player && player.segments && Array.isArray(player.segments) && player.color) {
+            fill(player.color);
+
+            // Interpolate head position for smooth movement
+            if (player._moveTime !== undefined) {
+                const t = Math.min((now - player._moveTime) / UPDATE_INTERVAL, 1.0);
+                player._renderX = lerp(player._startX ?? player._targetX, player._targetX, t);
+                player._renderY = lerp(player._startY ?? player._targetY, player._targetY, t);
+            }
+
+            player.segments.forEach((segment, i) => {
+                if (segment && typeof segment.x === 'number' && typeof segment.y === 'number') {
+                    if (i === 0 && player._renderX !== undefined) {
+                        // Draw head at interpolated position
+                        rect(player._renderX, player._renderY, scl, scl);
+                    } else {
                         rect(segment.x, segment.y, scl, scl);
                     }
-                });
-
-                // Draw score for the local player
-                if (id === playerId) {
-                    score = player.score;
-                    fill(255);
-                    textSize(20);
-                    textAlign(LEFT);
-                    text("Score: " + score, 10, height - 10);
                 }
-            } else {
-                 console.warn(`Attempted to draw invalid player data for ID: ${id}`);
-            }
-        });
-        
-        // Draw food
-        fill(255, 0, 100);
-        food.forEach(f => {
-            rect(f.x, f.y, scl, scl);
-        });
-        
-        // Draw player list
-        drawPlayerList();
+            });
 
-        // Draw winner message if applicable
-        if (winnerId) {
-            drawWinnerMessage();
+            if (id === playerId) {
+                score = player.score;
+                fill(255);
+                textSize(20);
+                textAlign(LEFT);
+                text("Score: " + score, 10, height - 10);
+            }
         }
+    });
+
+    // Draw food
+    fill(255, 0, 100);
+    food.forEach(f => {
+        rect(f.x, f.y, scl, scl);
+    });
+
+    // Draw player list
+    drawPlayerList();
+
+    // Draw winner message if applicable
+    if (winnerId) {
+        drawWinnerMessage();
     }
-    
-    // Request next frame
-    requestAnimationFrame(draw);
+
+    // Draw disconnect overlay
+    if (isDisconnected) {
+        fill(0, 0, 0, 150);
+        rect(0, height / 2 - 30, width, 60);
+        fill(255);
+        textSize(24);
+        textAlign(CENTER, CENTER);
+        text("Disconnected — reconnecting...", width / 2, height / 2);
+    }
 }
 
 function drawPlayerList() {

@@ -49,6 +49,9 @@ const gameState = {
     winningScore: 20 // Score needed to win
 };
 
+// Queue for deferred disconnects — drained at the start of each game tick
+const pendingDisconnects = [];
+
 // Function to get the next available color
 function getAvailableColor() {
     for (const color of COLORS) {
@@ -61,32 +64,51 @@ function getAvailableColor() {
     return COLORS[0]; 
 }
 
-// Generate random position for food
+// Generate random position for food (bounded retries to avoid infinite loop)
 function generateFood(count = 1) {
     const cols = Math.floor(gameState.width / gameState.scale);
     const rows = Math.floor(gameState.height / gameState.scale);
-    
+
+    // Build occupied set once for all food items
+    const occupied = new Set();
+    gameState.players.forEach(player => {
+        player.segments.forEach(segment => {
+            occupied.add(`${segment.x},${segment.y}`);
+        });
+    });
+    gameState.food.forEach(f => occupied.add(`${f.x},${f.y}`));
+
     for (let i = 0; i < count; i++) {
-        let x = Math.floor(Math.random() * cols) * gameState.scale;
-        let y = Math.floor(Math.random() * rows) * gameState.scale;
-        // Ensure food doesn't spawn on a snake
-        let validPosition = false;
-        while (!validPosition) {
-            validPosition = true;
-            gameState.players.forEach(player => {
-                player.segments.forEach(segment => {
-                    if (segment.x === x && segment.y === y) {
-                        validPosition = false;
-                    }
-                });
-            });
-            if (!validPosition) {
-                // Try new position if invalid
-                x = Math.floor(Math.random() * cols) * gameState.scale;
-                y = Math.floor(Math.random() * rows) * gameState.scale;
+        let x, y;
+        let placed = false;
+
+        // Try random positions up to 100 times
+        for (let attempt = 0; attempt < 100; attempt++) {
+            x = Math.floor(Math.random() * cols) * gameState.scale;
+            y = Math.floor(Math.random() * rows) * gameState.scale;
+            if (!occupied.has(`${x},${y}`)) {
+                placed = true;
+                break;
             }
         }
-        gameState.food.push({ x, y });
+
+        // Fallback: scan grid for first unoccupied cell
+        if (!placed) {
+            for (let gx = 0; gx < cols && !placed; gx++) {
+                for (let gy = 0; gy < rows && !placed; gy++) {
+                    x = gx * gameState.scale;
+                    y = gy * gameState.scale;
+                    if (!occupied.has(`${x},${y}`)) {
+                        placed = true;
+                    }
+                }
+            }
+        }
+
+        if (placed) {
+            occupied.add(`${x},${y}`);
+            gameState.food.push({ x, y });
+        }
     }
 }
 
@@ -99,6 +121,17 @@ app.use(express.static('.'));
 // Update game state
 function updateGameState() {
     const now = Date.now();
+
+    // Drain pending disconnects safely before iterating players
+    while (pendingDisconnects.length > 0) {
+        const playerId = pendingDisconnects.shift();
+        const player = gameState.players.get(playerId);
+        if (player) {
+            gameState.usedColors.delete(player.color);
+            gameState.players.delete(playerId);
+            io.emit('playerLeft', playerId);
+        }
+    }
 
     // Pause game logic if there's a winner
     if (gameState.winnerId) return;
@@ -225,24 +258,25 @@ function broadcastGameState() {
     io.emit('gameState', state);
 }
 
-// Function to handle disconnection (used by inactivity check and socket disconnect)
+// Queue a disconnect to be processed at the start of the next game tick
 function handleDisconnect(playerId) {
-    console.log(`Disconnecting player ${playerId}...`);
-    const player = gameState.players.get(playerId);
-    if (player) {
-        gameState.usedColors.delete(player.color); // Release the color
-        gameState.players.delete(playerId);
-        io.emit('playerLeft', playerId); // Notify clients
+    console.log(`Queuing disconnect for player ${playerId}...`);
+    if (!pendingDisconnects.includes(playerId)) {
+        pendingDisconnects.push(playerId);
     }
 }
 
-// Start game loop
-setInterval(() => {
+// Start game loop (setTimeout-based to prevent tick overlap)
+function gameLoop() {
+    const start = Date.now();
     updateGameState();
     broadcastGameState();
-}, gameState.updateInterval); // Use defined interval
+    const elapsed = Date.now() - start;
+    setTimeout(gameLoop, Math.max(0, gameState.updateInterval - elapsed));
+}
+gameLoop();
 
-// Start inactivity check loop
+// Start inactivity check loop — queues disconnects instead of immediate delete
 const INACTIVITY_TIMEOUT = 20000; // 20 seconds
 setInterval(() => {
     const now = Date.now();
@@ -253,7 +287,7 @@ setInterval(() => {
             if (targetSocket) {
                 targetSocket.disconnect(true); // Force disconnect socket
             }
-            handleDisconnect(playerId); // Clean up game state
+            handleDisconnect(playerId); // Queue for cleanup
         }
     });
 }, 1000); // Check every second
