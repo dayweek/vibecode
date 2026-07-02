@@ -12,6 +12,18 @@ This is a real-time multiplayer gaming platform featuring two games: **Snake** a
 - `npm run dev` - Start development server with nodemon for auto-reload
 - `npm install` - Install dependencies
 
+## Running Bomberman
+
+Bomberman runs on the same server as Snake — there is no separate command or process.
+
+1. `npm install` — install dependencies (first time only).
+2. `npm start` (or `npm run dev` for auto-reload) — starts the Colyseus server on port `3000` (override with the `PORT` env var).
+3. Open **http://localhost:3000/bomberman.html** in the browser.
+
+Multiplayer: open the URL in multiple tabs/devices, or share the host's address, to join the same room. Server entry point is `server.js`, which defines the `bomberman` room from `bomberman-room.js`; the client is `bomberman.html` + `bomberman-sketch.js`.
+
+> Note: The stack has migrated from Socket.IO to **Colyseus** (`colyseus` + `@colyseus/ws-transport`). Game logic now lives in room classes (`bomberman-room.js`, `snake-room.js`), not `bomberman-server.js`. Some sections below still describe the older Socket.IO design.
+
 ## Architecture
 
 ### Backend (server.js)

@@ -1,5 +1,6 @@
 let scl = 32; // Tile size
-let socket;
+let room; // Colyseus room instance
+let colyseusClient; // Colyseus client instance
 let playerId;
 let players = new Map(); // Map of playerId -> player data
 let bombPickups = []; // Bomb pickups on the map
@@ -133,7 +134,7 @@ function setup() {
     }
 }
 
-function startGame() {
+async function startGame() {
     // Show game container
     const gameContainer = document.getElementById('game-container');
     if (gameContainer) {
@@ -143,239 +144,195 @@ function startGame() {
     // Update name display
     updateNameDisplay();
 
-    // Connect to Socket.io server
-    socket = io('/bomberman');
+    // Check if we have a saved persistent player ID
+    let persistentId = localStorage.getItem('bomberman_player_id');
+    if (!persistentId) {
+        persistentId = 'player_' + Math.random().toString(36).substring(2, 11) + '_' + Date.now();
+        localStorage.setItem('bomberman_player_id', persistentId);
+    }
 
-    socket.on('connect', () => {
-        console.log('Connected to Bomberman server');
+    // Connect to Colyseus server
+    const wsProtocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
+    colyseusClient = new Colyseus.Client(`${wsProtocol}://${window.location.host}`);
 
-        // Check if we have a saved persistent player ID
-        let persistentId = localStorage.getItem('bomberman_player_id');
+    try {
+        room = await colyseusClient.joinOrCreate('bomberman', {
+            persistentId: persistentId,
+            playerName: playerName,
+        });
 
-        // If we don't have one, generate a new one
-        if (!persistentId) {
-            persistentId = 'player_' + Math.random().toString(36).substring(2, 11) + '_' + Date.now();
-            localStorage.setItem('bomberman_player_id', persistentId);
-        }
-
-        // Send reconnect request with persistent ID and player name
-        socket.emit('reconnect_player', { persistentId, playerName });
+        playerId = room.sessionId;
+        console.log('Connected to Bomberman room:', playerId);
 
         myColor = null;
-        // Hide color display on reconnect
         const yourColorDiv = document.getElementById('your-color');
         if (yourColorDiv) yourColorDiv.style.display = 'none';
-    });
 
-    // Listen for player color assignment
-    socket.on('playerColor', (color) => {
-        myColor = color;
-        console.log(`Your color is: ${myColor}`);
+        // ── State change listeners ──────────────────────────────────
 
-        // Update the color display in the left panel
-        const colorDisplay = document.getElementById('color-display');
-        const yourColorDiv = document.getElementById('your-color');
-        if (colorDisplay && yourColorDiv) {
-            colorDisplay.style.backgroundColor = color;
-            yourColorDiv.style.display = 'block';
-        }
-    });
+        // Sync state on every patch from the server
+        room.onStateChange((state) => {
+            // Sync arrays from schema state
+            bombPickups = schemaArrayToPlain(state.bombPickups, ['x', 'y', 'pickupType']);
+            powerups = schemaArrayToPlain(state.powerups, ['x', 'y', 'pickupType']);
+            bombs = schemaArrayToPlain(state.bombs, ['x', 'y', 'placedTime', 'playerId', 'fuseTime']);
+            explosions = schemaArrayToPlain(state.explosions, ['x', 'y', 'createdTime', 'playerId']);
+            indestructibleWalls = schemaArrayToPlain(state.indestructibleWalls, ['x', 'y']);
+            destructibleWalls = schemaArrayToPlain(state.destructibleWalls, ['x', 'y']);
+            lavaTiles = schemaArrayToPlain(state.lavaTiles, ['x', 'y']);
 
-    socket.on('init', (data) => {
-        playerId = data.playerId;
-        // Initialize all players
-        data.gameState.players.forEach(player => {
-            // Initialize smooth animation properties
-            player.renderX = player.x;
-            player.renderY = player.y;
-            player.targetX = player.x;
-            player.targetY = player.y;
-            player.moveStartTime = Date.now();
-            players.set(player.id, player);
-        });
-        bombPickups = data.gameState.bombPickups || [];
-        powerups = data.gameState.powerups || [];
-        bombs = data.gameState.bombs || [];
-        explosions = data.gameState.explosions || [];
-        indestructibleWalls = data.gameState.indestructibleWalls || [];
-        destructibleWalls = data.gameState.destructibleWalls || [];
-        lavaTiles = data.gameState.lavaTiles || [];
+            // Sync players from MapSchema
+            const currentIds = new Set();
+            state.players.forEach((serverPlayer, id) => {
+                currentIds.add(id);
+                if (players.has(id)) {
+                    const localPlayer = players.get(id);
 
-        // Set canvas size from server
-        if (data.gameState.width && data.gameState.height) {
-            if (width !== data.gameState.width || height !== data.gameState.height) {
-                resizeCanvas(data.gameState.width, data.gameState.height);
-            }
-        }
-    });
+                    if (localPlayer.renderX === undefined) {
+                        localPlayer.renderX = serverPlayer.x;
+                        localPlayer.renderY = serverPlayer.y;
+                    }
 
-    socket.on('gameState', (state) => {
-        // Update all players
-        const currentIds = new Set();
-        state.players.forEach(serverPlayer => {
-            currentIds.add(serverPlayer.id);
-            if (players.has(serverPlayer.id)) {
-                // Update existing player
-                const localPlayer = players.get(serverPlayer.id);
+                    if (localPlayer.targetX !== serverPlayer.x || localPlayer.targetY !== serverPlayer.y) {
+                        localPlayer.startX = localPlayer.renderX;
+                        localPlayer.startY = localPlayer.renderY;
+                        localPlayer.targetX = serverPlayer.x;
+                        localPlayer.targetY = serverPlayer.y;
+                        localPlayer.moveStartTime = Date.now();
+                    }
 
-                // Initialize animation properties if needed
-                if (localPlayer.renderX === undefined) {
-                    localPlayer.renderX = serverPlayer.x;
-                    localPlayer.renderY = serverPlayer.y;
+                    localPlayer.color = serverPlayer.color;
+                    localPlayer.playerName = serverPlayer.playerName;
+                    localPlayer.alive = serverPlayer.alive;
+                    localPlayer.activeBombs = serverPlayer.activeBombs;
+                    localPlayer.maxBombs = serverPlayer.maxBombs;
+                    localPlayer.bombRange = serverPlayer.bombRange;
+                    localPlayer.speedBoosts = serverPlayer.speedBoosts;
+                    localPlayer.invisibleUntil = serverPlayer.invisibleUntil;
+                    localPlayer.invisible = serverPlayer.invisible;
+                    localPlayer.isMoving = serverPlayer.isMoving;
+                    localPlayer.lives = serverPlayer.lives;
+                    localPlayer.killedBy = serverPlayer.killedBy;
+                    localPlayer.protectedUntil = serverPlayer.protectedUntil;
+                } else {
+                    players.set(id, {
+                        id: id,
+                        x: serverPlayer.x,
+                        y: serverPlayer.y,
+                        renderX: serverPlayer.x,
+                        renderY: serverPlayer.y,
+                        targetX: serverPlayer.x,
+                        targetY: serverPlayer.y,
+                        startX: serverPlayer.x,
+                        startY: serverPlayer.y,
+                        moveStartTime: Date.now(),
+                        color: serverPlayer.color,
+                        playerName: serverPlayer.playerName,
+                        alive: serverPlayer.alive,
+                        activeBombs: serverPlayer.activeBombs,
+                        maxBombs: serverPlayer.maxBombs,
+                        bombRange: serverPlayer.bombRange,
+                        speedBoosts: serverPlayer.speedBoosts,
+                        invisibleUntil: serverPlayer.invisibleUntil,
+                        invisible: serverPlayer.invisible,
+                        isMoving: serverPlayer.isMoving,
+                        lives: serverPlayer.lives,
+                        killedBy: serverPlayer.killedBy,
+                        protectedUntil: serverPlayer.protectedUntil,
+                    });
                 }
+            });
 
-                // Check if position changed (player moved to new tile)
-                if (localPlayer.targetX !== serverPlayer.x || localPlayer.targetY !== serverPlayer.y) {
-                    // Set current render position as starting point
-                    localPlayer.startX = localPlayer.renderX;
-                    localPlayer.startY = localPlayer.renderY;
-                    // Set new target
-                    localPlayer.targetX = serverPlayer.x;
-                    localPlayer.targetY = serverPlayer.y;
-                    localPlayer.moveStartTime = Date.now();
+            // Remove disconnected players
+            for (const [id] of players) {
+                if (!currentIds.has(id)) {
+                    players.delete(id);
+                    playerCharacterMap.delete(id);
                 }
+            }
 
-                // Update other properties
-                localPlayer.color = serverPlayer.color;
-                localPlayer.playerName = serverPlayer.playerName;
-                localPlayer.alive = serverPlayer.alive;
-                localPlayer.activeBombs = serverPlayer.activeBombs;
-                localPlayer.maxBombs = serverPlayer.maxBombs;
-                localPlayer.bombRange = serverPlayer.bombRange;
-                localPlayer.speedBoosts = serverPlayer.speedBoosts;
-                localPlayer.invisibleUntil = serverPlayer.invisibleUntil;
-                localPlayer.invisible = serverPlayer.invisible;
-                localPlayer.isMoving = serverPlayer.isMoving;
-                localPlayer.lives = serverPlayer.lives;
-                localPlayer.killedBy = serverPlayer.killedBy;
+            // Update canvas size if grid dimensions changed
+            if (state.gridWidth && state.gridHeight) {
+                if (width !== state.gridWidth || height !== state.gridHeight) {
+                    resizeCanvas(state.gridWidth, state.gridHeight);
+                    generateFloorGrid();
+                }
+            }
 
-            } else {
-                // New player
-                serverPlayer.renderX = serverPlayer.x;
-                serverPlayer.renderY = serverPlayer.y;
-                serverPlayer.targetX = serverPlayer.x;
-                serverPlayer.targetY = serverPlayer.y;
-                serverPlayer.startX = serverPlayer.x;
-                serverPlayer.startY = serverPlayer.y;
-                serverPlayer.moveStartTime = Date.now();
-                players.set(serverPlayer.id, serverPlayer);
+            // Winner detection
+            const newWinnerId = state.winnerId || null;
+            if (newWinnerId && !winnerId) {
+                winnerDetectedTime = Date.now();
+            }
+            if (!newWinnerId && winnerId) {
+                winnerDetectedTime = null;
+            }
+            winnerId = newWinnerId;
+        });
+
+        // ── Message listeners (sounds, color) ───────────────────────
+
+        room.onMessage('playerColor', (color) => {
+            myColor = color;
+            console.log(`Your color is: ${myColor}`);
+            const colorDisplay = document.getElementById('color-display');
+            const yourColorDiv2 = document.getElementById('your-color');
+            if (colorDisplay && yourColorDiv2) {
+                colorDisplay.style.backgroundColor = color;
+                yourColorDiv2.style.display = 'block';
             }
         });
 
-        // Remove disconnected players
-        for (const [id] of players) {
-            if (!currentIds.has(id)) {
-                players.delete(id);
-            }
-        }
+        room.onMessage('playDieSound', () => {
+            if (!isSoundEnabled) return;
+            const dieSound = document.getElementById('dieSound');
+            if (dieSound) { dieSound.currentTime = 0; dieSound.play().catch(() => {}); }
+        });
 
-        bombPickups = state.bombPickups || [];
-        powerups = state.powerups || [];
-        bombs = state.bombs || [];
-        explosions = state.explosions || [];
-        indestructibleWalls = state.indestructibleWalls || [];
-        destructibleWalls = state.destructibleWalls || [];
-        lavaTiles = state.lavaTiles || [];
+        room.onMessage('playWinSound', () => {
+            if (!isSoundEnabled) return;
+            const winSound = document.getElementById('winSound');
+            if (winSound) { winSound.currentTime = 0; winSound.play().catch(() => {}); }
+        });
 
-        // Update canvas size if grid dimensions changed
-        if (state.width && state.height) {
-            if (width !== state.width || height !== state.height) {
-                resizeCanvas(state.width, state.height);
-                generateFloorGrid(); // Regenerate floor on resize
-            }
-        }
+        room.onMessage('playExplosionSound', () => {
+            if (!isSoundEnabled) return;
+            const explosionSound = document.getElementById('explosionSound');
+            if (explosionSound) { explosionSound.currentTime = 0; explosionSound.play().catch(() => {}); }
+        });
 
-        // Check if this is the first time we're detecting a winner
-        if (state.winnerId && !winnerId) {
-            winnerDetectedTime = Date.now();
-        }
+        room.onMessage('playLevelUpSound', () => {
+            if (!isSoundEnabled) return;
+            const levelUpSound = document.getElementById('levelUpSound');
+            if (levelUpSound) { levelUpSound.currentTime = 0; levelUpSound.play().catch(() => {}); }
+        });
 
-        // Reset winner tracking when game restarts
-        if (!state.winnerId && winnerId) {
-            winnerDetectedTime = null;
-        }
+        room.onMessage('playNewSound', () => {
+            if (!isSoundEnabled) return;
+            const newSound = document.getElementById('newSound');
+            if (newSound) { newSound.currentTime = 0; newSound.play().catch(() => {}); }
+        });
 
-        winnerId = state.winnerId;
-    });
+        // Handle room errors and disconnection
+        room.onError((code, message) => {
+            console.error('Room error:', code, message);
+        });
 
-    socket.on('playerLeft', (id) => {
-        players.delete(id);
-        playerCharacterMap.delete(id);
-    });
+        room.onLeave((code) => {
+            console.log('Left room:', code);
+        });
 
-    socket.on('playerJoined', (data) => {
-        if (data.playerId !== playerId) {
-            // Initialize smooth animation properties
-            data.playerData.renderX = data.playerData.x;
-            data.playerData.renderY = data.playerData.y;
-            data.playerData.targetX = data.playerData.x;
-            data.playerData.targetY = data.playerData.y;
-            data.playerData.startX = data.playerData.x;
-            data.playerData.startY = data.playerData.y;
-            data.playerData.moveStartTime = Date.now();
-            players.set(data.playerId, data.playerData);
-        }
-    });
-
-    // Sound effect listeners
-    // socket.on('playEatSound', () => {
-    //     const eatSound = document.getElementById('eatSound');
-    //     if (eatSound) {
-    //         eatSound.currentTime = 0;
-    //         eatSound.play().catch(e => console.error("Error playing eat sound:", e));
-    //     }
-    // });
-
-    socket.on('playDieSound', () => {
-        if (!isSoundEnabled) return;
-        const dieSound = document.getElementById('dieSound');
-        if (dieSound) {
-            dieSound.currentTime = 0;
-            dieSound.play().catch(e => console.error("Error playing die sound:", e));
-        }
-    });
-
-    // socket.on('playNewSound', () => {
-    //     const newSound = document.getElementById('newSound');
-    //     if (newSound) {
-    //         newSound.currentTime = 0;
-    //         newSound.play().catch(e => console.error("Error playing new sound:", e));
-    //     }
-    // });
-
-    socket.on('playWinSound', () => {
-        if (!isSoundEnabled) return;
-        const winSound = document.getElementById('winSound');
-        if (winSound) {
-            winSound.currentTime = 0;
-            winSound.play().catch(e => console.error("Error playing win sound:", e));
-        }
-    });
-
-    socket.on('playExplosionSound', () => {
-        if (!isSoundEnabled) return;
-        const explosionSound = document.getElementById('explosionSound');
-        if (explosionSound) {
-            explosionSound.currentTime = 0;
-            explosionSound.play().catch(e => console.error("Error playing explosion sound:", e));
-        }
-    });
-
-    socket.on('playLevelUpSound', () => {
-        if (!isSoundEnabled) return;
-        const levelUpSound = document.getElementById('levelUpSound');
-        if (levelUpSound) {
-            levelUpSound.currentTime = 0;
-            levelUpSound.play().catch(e => console.error("Error playing level-up sound:", e));
-        }
-    });
+    } catch (e) {
+        console.error('Failed to join Bomberman room:', e);
+        return;
+    }
 
     // Reset button listener
     const resetButton = document.getElementById('resetButton');
     if (resetButton) {
         resetButton.addEventListener('click', () => {
-            if (socket && playerId) {
-                socket.emit('resetGame');
+            if (room && playerId) {
+                room.send('resetGame');
             }
         });
     }
@@ -385,10 +342,8 @@ function startGame() {
     const backgroundMusic = document.getElementById('backgroundMusic');
 
     if (toggleMusicButton && backgroundMusic) {
-        let isMusicPlaying = false; // Music off by default
+        let isMusicPlaying = false;
         toggleMusicButton.textContent = 'Play Music';
-
-        // No initial play, music starts paused
 
         toggleMusicButton.addEventListener('click', () => {
             if (isMusicPlaying) {
@@ -407,16 +362,28 @@ function startGame() {
     // Sound effects toggle listener
     const toggleSoundButton = document.getElementById('toggleSoundButton');
     if (toggleSoundButton) {
-        // Set initial text based on loaded preference
         toggleSoundButton.textContent = isSoundEnabled ? 'Sound On' : 'Sound Off';
 
         toggleSoundButton.addEventListener('click', () => {
             isSoundEnabled = !isSoundEnabled;
             toggleSoundButton.textContent = isSoundEnabled ? 'Sound On' : 'Sound Off';
-            // Save preference to localStorage
             localStorage.setItem('bomberman_sound_enabled', isSoundEnabled);
         });
     }
+}
+
+// Helper: convert Colyseus ArraySchema items to plain objects
+function schemaArrayToPlain(schemaArray, fields) {
+    const result = [];
+    for (let i = 0; i < schemaArray.length; i++) {
+        const item = schemaArray[i];
+        const obj = {};
+        for (const f of fields) {
+            obj[f] = item[f];
+        }
+        result.push(obj);
+    }
+    return result;
 }
 
 function draw() {
@@ -554,7 +521,7 @@ function drawBombPickups() {
 
 function drawPowerups() {
     powerups.forEach(powerup => {
-        if (powerup.type === 'flame') {
+        if (powerup.pickupType === 'flame') {
             // Draw flame powerup as a red/orange circle
             fill(255, 69, 0); // Red-orange
             noStroke();
@@ -565,7 +532,7 @@ function drawPowerups() {
             textSize(20);
             textAlign(CENTER, CENTER);
             text("F", powerup.x + scl/2, powerup.y + scl/2);
-        } else if (powerup.type === 'speed') {
+        } else if (powerup.pickupType === 'speed') {
             // Draw speed powerup as a cyan circle
             fill(0, 255, 255); // Cyan
             noStroke();
@@ -576,7 +543,7 @@ function drawPowerups() {
             textSize(20);
             textAlign(CENTER, CENTER);
             text("S", powerup.x + scl/2, powerup.y + scl/2);
-        } else if (powerup.type === 'invisibility') {
+        } else if (powerup.pickupType === 'invisibility') {
             // Draw invisibility powerup as a purple circle with glow
             fill(138, 43, 226); // Purple
             noStroke();
@@ -587,7 +554,7 @@ function drawPowerups() {
             textSize(20);
             textAlign(CENTER, CENTER);
             text("I", powerup.x + scl/2, powerup.y + scl/2);
-        } else if (powerup.type === 'life') {
+        } else if (powerup.pickupType === 'life') {
             // Draw life powerup as a pink/red circle (heart color)
             fill(255, 20, 147); // Deep pink
             noStroke();
@@ -670,8 +637,8 @@ function updateNameDisplay() {
                     nameText.textContent = playerName;
 
                     // Send updated name to server
-                    if (socket && socket.connected) {
-                        socket.emit('update_player_name', playerName);
+                    if (room) {
+                        room.send('update_player_name', playerName);
                     }
                 }
             });
@@ -814,7 +781,6 @@ function updateActiveBombsDisplay() {
     const activeBombsList = document.getElementById('active-bombs-list');
 
     if (!activeBombsDisplay || !activeBombsList || !players.has(playerId)) {
-        console.log('DEBUG: Missing elements or playerId', { activeBombsDisplay: !!activeBombsDisplay, activeBombsList: !!activeBombsList, hasPlayerId: players.has(playerId) });
         return;
     }
 
@@ -826,11 +792,8 @@ function updateActiveBombsDisplay() {
         return;
     }
 
-    console.log('DEBUG: Player is dead!', { killedBy: myPlayer.killedBy, alive: myPlayer.alive });
-
     // Show the display
     activeBombsDisplay.style.display = 'block';
-    console.log('DEBUG: Set display to block');
 
     // Build the death message
     let html = '';
@@ -983,11 +946,11 @@ function keyPressed() {
         if (winnerDetectedTime) {
             const elapsedTime = (Date.now() - winnerDetectedTime) / 1000;
             if (elapsedTime >= winDelaySeconds) {
-                socket.emit('requestRestart');
+                room.send('requestRestart');
                 winnerDetectedTime = null;
             }
         } else {
-            socket.emit('requestRestart');
+            room.send('requestRestart');
         }
         return false;
     }
@@ -1002,7 +965,7 @@ function keyPressed() {
 
     // Handle space bar for bombs (separate from directional keys)
     if (key === ' ' || keyCode === 32) {
-        socket.emit('placeBomb');
+        room.send('placeBomb');
         return false;
     }
 
@@ -1025,7 +988,7 @@ function keyPressed() {
         // Add to the end (most recent)
         directionKeys.push({ keyCode, direction });
         // Emit moveStart with the most recent direction
-        socket.emit('moveStart', direction);
+        room.send('moveStart', direction);
     }
 
     return false; // Prevent default behavior
@@ -1060,10 +1023,10 @@ function keyReleased() {
     // If there are still direction keys pressed, switch to the most recent one
     if (directionKeys.length > 0) {
         const mostRecent = directionKeys[directionKeys.length - 1];
-        socket.emit('moveStart', mostRecent.direction);
+        room.send('moveStart', mostRecent.direction);
     } else {
         // No direction keys pressed, stop movement
-        socket.emit('moveStop');
+        room.send('moveStop');
     }
 
     return false; // Prevent default behavior
