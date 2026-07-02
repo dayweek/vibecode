@@ -194,11 +194,20 @@ async function startGame() {
                     }
 
                     if (localPlayer.targetX !== serverPlayer.x || localPlayer.targetY !== serverPlayer.y) {
-                        localPlayer.startX = localPlayer.renderX;
-                        localPlayer.startY = localPlayer.renderY;
+                        const jump = Math.abs(serverPlayer.x - localPlayer.targetX) + Math.abs(serverPlayer.y - localPlayer.targetY);
+                        if (jump > scl) {
+                            // Teleport (respawn / grid resize): snap instead of animating
+                            localPlayer.waypoints = [];
+                            localPlayer.renderX = serverPlayer.x;
+                            localPlayer.renderY = serverPlayer.y;
+                            localPlayer.renderSpeed = 0;
+                        } else {
+                            // Normal one-tile step: queue it so the renderer
+                            // follows the actual path (no diagonal shortcuts)
+                            (localPlayer.waypoints = localPlayer.waypoints || []).push({ x: serverPlayer.x, y: serverPlayer.y });
+                        }
                         localPlayer.targetX = serverPlayer.x;
                         localPlayer.targetY = serverPlayer.y;
-                        localPlayer.moveStartTime = Date.now();
                     }
 
                     localPlayer.color = serverPlayer.color;
@@ -223,9 +232,8 @@ async function startGame() {
                         renderY: serverPlayer.y,
                         targetX: serverPlayer.x,
                         targetY: serverPlayer.y,
-                        startX: serverPlayer.x,
-                        startY: serverPlayer.y,
-                        moveStartTime: Date.now(),
+                        renderSpeed: 0,
+                        waypoints: [],
                         color: serverPlayer.color,
                         playerName: serverPlayer.playerName,
                         alive: serverPlayer.alive,
@@ -646,9 +654,97 @@ function updateNameDisplay() {
     }
 }
 
+// Advance a player's render position toward its server position using a
+// velocity model: accelerate when a run starts, cruise at the server's move
+// speed across intermediate tiles, and brake to a stop only once the server
+// reports the player is no longer moving (i.e. on the final tile).
+function updateRenderPosition(player, dt) {
+    if (player.renderSpeed === undefined) player.renderSpeed = 0;
+    if (!player.waypoints) player.waypoints = [];
+
+    // Remaining distance along the tile-by-tile waypoint path (segments are
+    // axis-aligned, so Manhattan distance equals the path length)
+    let dist = 0;
+    let px = player.renderX;
+    let py = player.renderY;
+    for (const w of player.waypoints) {
+        dist += Math.abs(w.x - px) + Math.abs(w.y - py);
+        px = w.x;
+        py = w.y;
+    }
+
+    // Fell too far behind (e.g. tab was inactive): fast-forward to the end
+    if (dist > scl * 3) {
+        player.waypoints = [];
+        player.renderX = player.targetX;
+        player.renderY = player.targetY;
+        player.renderSpeed = 0;
+        return;
+    }
+
+    if (dist < 0.01) {
+        player.renderX = player.targetX;
+        player.renderY = player.targetY;
+        player.waypoints = [];
+        // Keep momentum between tiles while the run continues so mid-run
+        // patch jitter doesn't re-trigger acceleration on every tile
+        if (!player.isMoving) player.renderSpeed = 0;
+        return;
+    }
+
+    // Speed boosts shorten the server's move interval; match it so the
+    // renderer keeps pace with boosted players
+    const moveInterval = serverMoveInterval * Math.pow(0.9, player.speedBoosts || 0);
+    const cruiseSpeed = scl / moveInterval; // px per ms
+    const accel = cruiseSpeed / 150; // reach cruise speed in ~150ms
+    const brakeDecel = (cruiseSpeed * cruiseSpeed) / scl; // stop over ~half a tile
+
+    let desiredSpeed;
+    if (player.isMoving) {
+        // Slight overspeed, growing if we fall behind the server, so the
+        // render position catches up instead of lagging further
+        const catchUp = dist > scl ? 1 + (dist / scl - 1) * 0.5 : 1;
+        desiredSpeed = cruiseSpeed * 1.05 * catchUp;
+    } else {
+        // Run is over: follow a braking curve that comes to rest exactly
+        // at the final tile
+        desiredSpeed = Math.min(cruiseSpeed * 1.05, Math.sqrt(2 * brakeDecel * dist));
+    }
+
+    if (player.renderSpeed < desiredSpeed) {
+        player.renderSpeed = Math.min(desiredSpeed, player.renderSpeed + accel * dt);
+    } else {
+        player.renderSpeed = desiredSpeed;
+    }
+
+    // Advance along the waypoint path, turning at tile corners instead of
+    // cutting diagonally toward the newest position
+    let step = Math.min(dist, player.renderSpeed * dt);
+    while (step > 0.0001 && player.waypoints.length > 0) {
+        const w = player.waypoints[0];
+        const dx = w.x - player.renderX;
+        const dy = w.y - player.renderY;
+        const d = Math.sqrt(dx * dx + dy * dy);
+        if (d <= step) {
+            player.renderX = w.x;
+            player.renderY = w.y;
+            step -= d;
+            player.waypoints.shift();
+        } else {
+            player.renderX += (dx / d) * step;
+            player.renderY += (dy / d) * step;
+            step = 0;
+        }
+    }
+}
+
+let _lastPlayersDrawTime = 0;
+
 function drawPlayers() {
     const now = Date.now();
-    const animationDuration = serverMoveInterval; // Match server's move interval (150ms)
+    // Frame delta in ms, capped so tab-switch stalls don't cause jumps
+    const dt = _lastPlayersDrawTime ? Math.min(now - _lastPlayersDrawTime, 50) : 16;
+    _lastPlayersDrawTime = now;
 
     players.forEach((player, id) => {
         if (!player || !player.alive || !player.color) return;
@@ -667,16 +763,7 @@ function drawPlayers() {
             }
         }
 
-        // Calculate smooth interpolation from start to target position
-        const elapsed = now - player.moveStartTime;
-        const t = Math.min(elapsed / animationDuration, 1.0); // Clamp to 1.0
-
-        // Use easeOutCubic for smooth deceleration
-        const eased = 1 - Math.pow(1 - t, 3);
-
-        // Interpolate between start and target
-        player.renderX = lerp(player.startX || player.targetX, player.targetX, eased);
-        player.renderY = lerp(player.startY || player.targetY, player.targetY, eased);
+        updateRenderPosition(player, dt);
 
         // Get the character sprite for this player
         const characterIndex = playerCharacterMap.get(id);
@@ -987,8 +1074,9 @@ function keyPressed() {
         directionKeys = directionKeys.filter(k => k.keyCode !== keyCode);
         // Add to the end (most recent)
         directionKeys.push({ keyCode, direction });
-        // Emit moveStart with the most recent direction
-        room.send('moveStart', direction);
+        // Send all held directions so the server can combine them
+        // (e.g. holding up + right moves up and right around obstacles)
+        room.send('setDirections', directionKeys.map(k => k.direction));
     }
 
     return false; // Prevent default behavior
@@ -1020,14 +1108,8 @@ function keyReleased() {
     // Remove this key from directionKeys array
     directionKeys = directionKeys.filter(k => k.keyCode !== keyCode);
 
-    // If there are still direction keys pressed, switch to the most recent one
-    if (directionKeys.length > 0) {
-        const mostRecent = directionKeys[directionKeys.length - 1];
-        room.send('moveStart', mostRecent.direction);
-    } else {
-        // No direction keys pressed, stop movement
-        room.send('moveStop');
-    }
+    // Send the remaining held directions (empty list stops movement)
+    room.send('setDirections', directionKeys.map(k => k.direction));
 
     return false; // Prevent default behavior
 }

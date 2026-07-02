@@ -140,11 +140,29 @@ class BombermanRoom extends Room {
         this.clock.setInterval(() => this.checkInactivity(), 5000);
 
         // ── Message handlers ──────────────────────────────────────────
+        // Sanitize a client-supplied direction list down to valid unit steps
+        const sanitizeDirections = (directions) =>
+            (Array.isArray(directions) ? directions : [])
+                .filter(d => d && (Math.abs(d.x) + Math.abs(d.y) === 1)
+                    && [-1, 0, 1].includes(d.x) && [-1, 0, 1].includes(d.y))
+                .map(d => ({ x: d.x, y: d.y }))
+                .slice(0, 4);
+
+        // Full list of held direction keys, oldest first / most recent last
+        this.onMessage('setDirections', (client, directions) => {
+            const internal = this.playerInternal.get(client.sessionId);
+            if (internal) {
+                internal.lastActivityTime = Date.now();
+                internal.pendingDirections = sanitizeDirections(directions);
+                internal.pendingDirectionChanged = true;
+            }
+        });
+
         this.onMessage('moveStart', (client, direction) => {
             const internal = this.playerInternal.get(client.sessionId);
             if (internal) {
                 internal.lastActivityTime = Date.now();
-                internal.pendingDirection = direction;
+                internal.pendingDirections = sanitizeDirections([direction]);
                 internal.pendingDirectionChanged = true;
             }
         });
@@ -153,7 +171,7 @@ class BombermanRoom extends Room {
             const internal = this.playerInternal.get(client.sessionId);
             if (internal) {
                 internal.lastActivityTime = Date.now();
-                internal.pendingDirection = null;
+                internal.pendingDirections = [];
                 internal.pendingDirectionChanged = true;
             }
         });
@@ -273,9 +291,10 @@ class BombermanRoom extends Room {
 
             this.state.players.set(client.sessionId, player);
             this.playerInternal.set(client.sessionId, {
-                currentDirection: null,
-                pendingDirection: null,
+                currentDirections: [],
+                pendingDirections: [],
                 pendingDirectionChanged: false,
+                lastStepDirection: null,
                 pendingBomb: false,
                 lastActivityTime: Date.now(),
                 lastMoveTime: Date.now(),
@@ -311,9 +330,10 @@ class BombermanRoom extends Room {
             this.sessionToPersistentId.set(client.sessionId, persistentId);
 
             this.playerInternal.set(client.sessionId, {
-                currentDirection: null,
-                pendingDirection: null,
+                currentDirections: [],
+                pendingDirections: [],
                 pendingDirectionChanged: false,
+                lastStepDirection: null,
                 pendingBomb: false,
                 lastActivityTime: Date.now(),
                 lastMoveTime: Date.now(),
@@ -380,8 +400,11 @@ class BombermanRoom extends Room {
         // Process pending direction changes from message handlers
         for (const [sessionId, internal] of this.playerInternal) {
             if (internal.pendingDirectionChanged) {
-                internal.currentDirection = internal.pendingDirection;
-                if (internal.pendingDirection) {
+                const changed = JSON.stringify(internal.currentDirections) !== JSON.stringify(internal.pendingDirections);
+                internal.currentDirections = internal.pendingDirections;
+                // Step immediately on a real direction change, but not on
+                // key auto-repeat resending the same held keys
+                if (changed && internal.currentDirections.length > 0) {
                     internal.lastMoveTime = now - CONFIG.moveInterval;
                 }
                 internal.pendingDirectionChanged = false;
@@ -527,71 +550,83 @@ class BombermanRoom extends Room {
             const speedMultiplier = Math.pow(0.9, player.speedBoosts);
             const playerMoveInterval = CONFIG.moveInterval * speedMultiplier;
 
-            if (internal.currentDirection && now - internal.lastMoveTime >= playerMoveInterval) {
+            if (internal.currentDirections.length > 0 && now - internal.lastMoveTime >= playerMoveInterval) {
                 internal.lastMoveTime = now;
                 player.lastMoveTime = now;
 
-                const newX = player.x + internal.currentDirection.x * CONFIG.scale;
-                const newY = player.y + internal.currentDirection.y * CONFIG.scale;
-
-                if (newX >= 0 && newX < this.state.gridWidth && newY >= 0 && newY < this.state.gridHeight) {
-                    let collision = false;
-                    const targetKey = `${newX},${newY}`;
-
-                    if (this.wallLookup.has(targetKey)) {
-                        collision = true;
+                // Candidate order: most recent key first; with multiple keys
+                // held, put the direction used last step at the back so free
+                // directions alternate (staircase) and blocked ones fall back
+                // to the other held key
+                let candidates = internal.currentDirections.slice().reverse();
+                if (candidates.length > 1 && internal.lastStepDirection) {
+                    const last = candidates.find(d => d.x === internal.lastStepDirection.x && d.y === internal.lastStepDirection.y);
+                    if (last) {
+                        candidates = candidates.filter(d => d !== last);
+                        candidates.push(last);
                     }
+                }
 
-                    if (!collision) {
-                        const bombAtTarget = this.bombLookup.get(targetKey);
-                        if (bombAtTarget) {
-                            if (player.x !== bombAtTarget.x || player.y !== bombAtTarget.y) {
-                                collision = true;
-                            }
+                let newX = null;
+                let newY = null;
+                for (const dir of candidates) {
+                    const tryX = player.x + dir.x * CONFIG.scale;
+                    const tryY = player.y + dir.y * CONFIG.scale;
+
+                    if (tryX < 0 || tryX >= this.state.gridWidth || tryY < 0 || tryY >= this.state.gridHeight) continue;
+
+                    const targetKey = `${tryX},${tryY}`;
+                    if (this.wallLookup.has(targetKey)) continue;
+
+                    const bombAtTarget = this.bombLookup.get(targetKey);
+                    if (bombAtTarget && (player.x !== bombAtTarget.x || player.y !== bombAtTarget.y)) continue;
+
+                    newX = tryX;
+                    newY = tryY;
+                    internal.lastStepDirection = dir;
+                    break;
+                }
+
+                if (newX !== null) {
+                    player.x = newX;
+                    player.y = newY;
+
+                    // Bomb pickup collection
+                    for (let i = this.state.bombPickups.length - 1; i >= 0; i--) {
+                        const p = this.state.bombPickups[i];
+                        if (p.x === newX && p.y === newY) {
+                            player.maxBombs++;
+                            this.state.bombPickups.splice(i, 1);
+                            const client = this.clients.find(c => c.sessionId === sessionId);
+                            if (client) client.send('playLevelUpSound');
+                            break;
                         }
                     }
 
-                    if (!collision) {
-                        player.x = newX;
-                        player.y = newY;
-
-                        // Bomb pickup collection
-                        for (let i = this.state.bombPickups.length - 1; i >= 0; i--) {
-                            const p = this.state.bombPickups[i];
-                            if (p.x === newX && p.y === newY) {
-                                player.maxBombs++;
-                                this.state.bombPickups.splice(i, 1);
-                                const client = this.clients.find(c => c.sessionId === sessionId);
-                                if (client) client.send('playLevelUpSound');
-                                break;
+                    // Powerup collection
+                    for (let i = this.state.powerups.length - 1; i >= 0; i--) {
+                        const p = this.state.powerups[i];
+                        if (p.x === newX && p.y === newY) {
+                            if (p.pickupType === 'flame') {
+                                player.bombRange++;
+                            } else if (p.pickupType === 'speed') {
+                                if (player.speedBoosts < CONFIG.maxSpeedBoosts) player.speedBoosts++;
+                            } else if (p.pickupType === 'invisibility') {
+                                player.invisibleUntil = now + CONFIG.invisibilityDuration;
+                            } else if (p.pickupType === 'life') {
+                                player.lives++;
                             }
-                        }
-
-                        // Powerup collection
-                        for (let i = this.state.powerups.length - 1; i >= 0; i--) {
-                            const p = this.state.powerups[i];
-                            if (p.x === newX && p.y === newY) {
-                                if (p.pickupType === 'flame') {
-                                    player.bombRange++;
-                                } else if (p.pickupType === 'speed') {
-                                    if (player.speedBoosts < CONFIG.maxSpeedBoosts) player.speedBoosts++;
-                                } else if (p.pickupType === 'invisibility') {
-                                    player.invisibleUntil = now + CONFIG.invisibilityDuration;
-                                } else if (p.pickupType === 'life') {
-                                    player.lives++;
-                                }
-                                this.state.powerups.splice(i, 1);
-                                const client = this.clients.find(c => c.sessionId === sessionId);
-                                if (client) client.send('playLevelUpSound');
-                                break;
-                            }
+                            this.state.powerups.splice(i, 1);
+                            const client = this.clients.find(c => c.sessionId === sessionId);
+                            if (client) client.send('playLevelUpSound');
+                            break;
                         }
                     }
                 }
             }
 
             // Update synced movement state
-            player.isMoving = !!internal.currentDirection;
+            player.isMoving = internal.currentDirections.length > 0;
 
             // Update invisibility flag
             player.invisible = !!(player.invisibleUntil && player.invisibleUntil > now);
@@ -1010,7 +1045,9 @@ class BombermanRoom extends Room {
             this.resetPlayer(player, pos);
             const internal = this.playerInternal.get(sessionId);
             if (internal) {
-                internal.currentDirection = null;
+                internal.currentDirections = [];
+                internal.pendingDirections = [];
+                internal.lastStepDirection = null;
                 internal.lastMoveTime = Date.now();
                 internal.lastActivityTime = Date.now();
             }
