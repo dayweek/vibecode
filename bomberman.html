@@ -140,9 +140,155 @@
             word-break: break-word;
             margin-bottom: 3px;
         }
-        #edit-name-btn {
-            padding: 3px 6px;
-            font-size: 10px;
+        #lobby-name-row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 12px;
+        }
+        #lobby-name-row strong {
+            color: #4CAF50;
+        }
+        #lobby-name-row button {
+            width: auto;
+            padding: 4px 10px;
+            font-size: 11px;
+        }
+        .screen {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-color: #1a1a1a;
+            display: none;
+            justify-content: center;
+            align-items: flex-start;
+            padding-top: 60px;
+            z-index: 500;
+            overflow-y: auto;
+        }
+        .panel {
+            background-color: #2a2a2a;
+            padding: 25px 30px;
+            border-radius: 10px;
+            border: 2px solid #666;
+            width: 420px;
+            max-width: 90vw;
+            box-sizing: border-box;
+        }
+        .panel h2 {
+            margin: 0 0 15px 0;
+            color: #4CAF50;
+            text-align: center;
+        }
+        .muted {
+            color: #999;
+            font-size: 12px;
+        }
+        .room-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            background-color: #333;
+            border: 2px solid #444;
+            border-radius: 5px;
+            padding: 10px 12px;
+            margin-bottom: 8px;
+        }
+        .room-item .room-info {
+            font-size: 13px;
+        }
+        .room-item .room-meta {
+            font-size: 11px;
+            color: #999;
+            margin-top: 2px;
+        }
+        .room-item button {
+            width: auto;
+            padding: 6px 14px;
+        }
+        #room-list {
+            margin-top: 15px;
+            max-height: 50vh;
+            overflow-y: auto;
+        }
+        #create-room-btn {
+            padding: 12px;
+            font-size: 15px;
+            background-color: #2e7d32;
+            border-color: #4CAF50;
+        }
+        #create-room-btn:hover {
+            background-color: #388e3c;
+        }
+        #share-row {
+            display: flex;
+            gap: 8px;
+            margin-bottom: 15px;
+        }
+        #share-row input {
+            flex: 1;
+            padding: 8px;
+            font-size: 12px;
+            border: 2px solid #555;
+            border-radius: 5px;
+            background-color: #333;
+            color: #ccc;
+            box-sizing: border-box;
+        }
+        #share-row button {
+            width: auto;
+            padding: 6px 12px;
+            white-space: nowrap;
+        }
+        .lobby-player {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            background-color: #333;
+            border-radius: 5px;
+            padding: 8px 12px;
+            margin-bottom: 6px;
+            font-size: 14px;
+        }
+        .lobby-player .ready-tag {
+            font-size: 12px;
+            font-weight: bold;
+        }
+        .ready-yes { color: #4CAF50; }
+        .ready-no { color: #FF9800; }
+        .spectator-tag { color: #64B5F6; }
+        #lobby-actions {
+            display: flex;
+            gap: 8px;
+            margin-top: 15px;
+        }
+        #lobby-actions button {
+            padding: 10px;
+            font-size: 14px;
+        }
+        #start-btn:disabled {
+            opacity: 0.4;
+            cursor: not-allowed;
+        }
+        #lobby-status {
+            margin-top: 10px;
+            text-align: center;
+            min-height: 16px;
+        }
+        #spectator-banner {
+            position: fixed;
+            top: 0;
+            left: 50%;
+            transform: translateX(-50%);
+            background-color: rgba(30, 60, 120, 0.9);
+            color: #BBDEFB;
+            padding: 5px 15px;
+            border-radius: 0 0 8px 8px;
+            font-size: 13px;
+            z-index: 600;
+            display: none;
         }
     </style>
 </head>
@@ -153,9 +299,44 @@
             <h2>Welcome to Bomberman!</h2>
             <p>Enter your name to start playing:</p>
             <input type="text" id="name-input" placeholder="Your Name" maxlength="20" autofocus>
-            <button id="start-game-btn">Start Game</button>
+            <button id="start-game-btn">Continue</button>
         </div>
     </div>
+
+    <!-- Public room browser -->
+    <div id="room-browser" class="screen">
+        <div class="panel">
+            <h2>Bomberman Rooms</h2>
+            <button id="create-room-btn">Create New Room</button>
+            <div id="room-list"><p class="muted">Loading rooms...</p></div>
+        </div>
+    </div>
+
+    <!-- Waiting room -->
+    <div id="waiting-room" class="screen">
+        <div class="panel">
+            <h2>Lobby</h2>
+            <div id="lobby-name-row">
+                <span class="muted">Playing as:</span>
+                <strong id="lobby-name"></strong>
+                <button id="lobby-edit-name-btn">Change</button>
+            </div>
+            <p class="muted" style="margin-top:0;">Share this link so friends can join:</p>
+            <div id="share-row">
+                <input id="room-link" readonly>
+                <button id="copy-link-btn">Copy</button>
+            </div>
+            <div id="lobby-players"></div>
+            <div id="lobby-status" class="muted"></div>
+            <div id="lobby-actions">
+                <button id="ready-btn">I'm Ready</button>
+                <button id="start-btn" disabled>Start Game</button>
+                <button id="leave-room-btn">Leave</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="spectator-banner">👀 Spectating — you'll play in the next game</div>
 
     <div id="game-container">
         <div style="display: flex; flex-direction: column; gap: 10px;">
@@ -174,14 +355,13 @@
             <div id="player-name-display" style="display: none;">
                 <h3>Your Name:</h3>
                 <div id="player-name-text"></div>
-                <button id="edit-name-btn">Edit Name</button>
             </div>
             <div id="lives-status" style="background-color: #2a2a2a; padding: 5px 8px; border-radius: 5px; border: 2px solid #FF1493; text-align: center;">
                 <h3 style="margin: 0 0 3px 0; font-size: 11px; font-weight: normal; color: #999;">Lives</h3>
                 <div id="lives-count" style="font-size: 14px; font-weight: bold; color: #FF69B4;">0</div>
             </div>
             <div id="controls">
-                <button id="resetButton">New Game</button>
+                <button id="leaveGameButton">Leave Room</button>
                 <button id="toggleMusicButton">Music</button>
                 <button id="toggleSoundButton">Sound</button>
             </div>

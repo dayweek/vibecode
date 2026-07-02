@@ -11,10 +11,15 @@ let indestructibleWalls = []; // Permanent walls
 let destructibleWalls = []; // Destructible walls
 let lavaTiles = []; // Lava hazards
 let winnerId = null;
-let winnerDetectedTime = null;
-let winDelaySeconds = 3;
 let keysPressed = {}; // Track which keys are currently pressed
 let directionKeys = []; // Track order of pressed direction keys
+
+// Lobby state
+let gamePhase = 'lobby'; // 'lobby' or 'playing' (synced from server)
+let hostId = '';
+let amSpectator = false;
+let roomPollInterval = null;
+let lobbyButtonsInitialized = false;
 
 // Variable for player color
 let myColor = null;
@@ -107,10 +112,10 @@ function setup() {
     const nameInput = document.getElementById('name-input');
     const startGameBtn = document.getElementById('start-game-btn');
 
-    // If player already has a name, hide welcome modal and start game
+    // If player already has a name, hide welcome modal and go to the lobby flow
     if (playerName) {
         welcomeModal.style.display = 'none';
-        startGame();
+        initFlow();
     } else {
         // Show welcome modal and wait for name input
         nameInput.value = '';
@@ -121,7 +126,7 @@ function setup() {
                 playerName = inputName;
                 localStorage.setItem('bomberman_player_name', playerName);
                 welcomeModal.style.display = 'none';
-                startGame();
+                initFlow();
             }
         };
 
@@ -134,44 +139,226 @@ function setup() {
     }
 }
 
-async function startGame() {
-    // Show game container
-    const gameContainer = document.getElementById('game-container');
-    if (gameContainer) {
-        gameContainer.style.display = 'flex';
-    }
+// ── Lobby flow ──────────────────────────────────────────────────────
 
-    // Update name display
+function initFlow() {
     updateNameDisplay();
-
-    // Check if we have a saved persistent player ID
-    let persistentId = localStorage.getItem('bomberman_player_id');
-    if (!persistentId) {
-        persistentId = 'player_' + Math.random().toString(36).substring(2, 11) + '_' + Date.now();
-        localStorage.setItem('bomberman_player_id', persistentId);
-    }
+    setupLobbyButtons();
+    setupAudioButtons();
 
     // Connect to Colyseus server
     const wsProtocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
     colyseusClient = new Colyseus.Client(`${wsProtocol}://${window.location.host}`);
 
+    // Deep link: ?room=<id> joins that room directly
+    const roomId = new URLSearchParams(window.location.search).get('room');
+    if (roomId) {
+        joinRoomById(roomId);
+    } else {
+        showScreen('browser');
+    }
+}
+
+function joinOptions() {
+    let persistentId = localStorage.getItem('bomberman_player_id');
+    if (!persistentId) {
+        persistentId = 'player_' + Math.random().toString(36).substring(2, 11) + '_' + Date.now();
+        localStorage.setItem('bomberman_player_id', persistentId);
+    }
+    return { persistentId: persistentId, playerName: playerName };
+}
+
+function setRoomUrl(roomId) {
+    const url = new URL(window.location.href);
+    if (roomId) {
+        url.searchParams.set('room', roomId);
+    } else {
+        url.searchParams.delete('room');
+    }
+    history.replaceState(null, '', url.toString());
+}
+
+// Show one of the three screens: 'browser', 'waiting', 'game'
+function showScreen(name) {
+    const browser = document.getElementById('room-browser');
+    const waiting = document.getElementById('waiting-room');
+    const game = document.getElementById('game-container');
+    if (browser) browser.style.display = name === 'browser' ? 'flex' : 'none';
+    if (waiting) waiting.style.display = name === 'waiting' ? 'flex' : 'none';
+    if (game) game.style.display = name === 'game' ? 'flex' : 'none';
+
+    // Poll the public room list only while browsing
+    if (name === 'browser') {
+        fetchRooms();
+        if (!roomPollInterval) roomPollInterval = setInterval(fetchRooms, 3000);
+    } else if (roomPollInterval) {
+        clearInterval(roomPollInterval);
+        roomPollInterval = null;
+    }
+}
+
+async function fetchRooms() {
+    const listEl = document.getElementById('room-list');
     try {
-        room = await colyseusClient.joinOrCreate('bomberman', {
-            persistentId: persistentId,
-            playerName: playerName,
-        });
+        const res = await fetch('/api/rooms');
+        const rooms = await res.json();
+        renderRoomList(rooms);
+    } catch (e) {
+        if (listEl) listEl.innerHTML = '<p class="muted">Could not load rooms.</p>';
+    }
+}
+
+function escapeHtml(str) {
+    return String(str).replace(/[&<>"']/g, c => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+    }[c]));
+}
+
+function renderRoomList(rooms) {
+    const listEl = document.getElementById('room-list');
+    if (!listEl) return;
+
+    if (!rooms || rooms.length === 0) {
+        listEl.innerHTML = '<p class="muted">No rooms yet — create one and share the link!</p>';
+        return;
+    }
+
+    listEl.innerHTML = '';
+    rooms.forEach(r => {
+        const meta = r.metadata || {};
+        const inGame = meta.phase === 'playing';
+        const item = document.createElement('div');
+        item.className = 'room-item';
+
+        const info = document.createElement('div');
+        info.innerHTML =
+            `<div class="room-info">${escapeHtml(meta.hostName || 'Unknown')}'s room</div>` +
+            `<div class="room-meta">${r.clients}/${r.maxClients} players &middot; ${inGame ? '🎮 Game in progress' : '🕐 Waiting for players'}</div>`;
+
+        const joinBtn = document.createElement('button');
+        joinBtn.textContent = inGame ? 'Watch' : 'Join';
+        joinBtn.addEventListener('click', () => joinRoomById(r.roomId));
+
+        item.appendChild(info);
+        item.appendChild(joinBtn);
+        listEl.appendChild(item);
+    });
+}
+
+function setupLobbyButtons() {
+    if (lobbyButtonsInitialized) return;
+    lobbyButtonsInitialized = true;
+
+    const createBtn = document.getElementById('create-room-btn');
+    if (createBtn) createBtn.addEventListener('click', createRoom);
+
+    const readyBtn = document.getElementById('ready-btn');
+    if (readyBtn) readyBtn.addEventListener('click', () => {
+        if (!room) return;
+        const me = players.get(playerId);
+        room.send('setReady', !(me && me.ready));
+    });
+
+    const startBtn = document.getElementById('start-btn');
+    if (startBtn) startBtn.addEventListener('click', () => {
+        if (room) room.send('startGame');
+    });
+
+    const leaveRoomBtn = document.getElementById('leave-room-btn');
+    if (leaveRoomBtn) leaveRoomBtn.addEventListener('click', leaveRoom);
+
+    // Name changes are only allowed from the waiting room
+    const editNameBtn = document.getElementById('lobby-edit-name-btn');
+    if (editNameBtn) editNameBtn.addEventListener('click', () => {
+        const newName = prompt('Enter your new name:', playerName);
+        if (newName && newName.trim()) {
+            playerName = newName.trim().substring(0, 20);
+            localStorage.setItem('bomberman_player_name', playerName);
+            updateNameDisplay();
+            if (room) room.send('update_player_name', playerName);
+        }
+    });
+
+    const leaveGameBtn = document.getElementById('leaveGameButton');
+    if (leaveGameBtn) leaveGameBtn.addEventListener('click', leaveRoom);
+
+    const copyBtn = document.getElementById('copy-link-btn');
+    if (copyBtn) copyBtn.addEventListener('click', () => {
+        const linkInput = document.getElementById('room-link');
+        if (!linkInput) return;
+        const doneLabel = () => {
+            copyBtn.textContent = 'Copied!';
+            setTimeout(() => { copyBtn.textContent = 'Copy'; }, 1500);
+        };
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+            navigator.clipboard.writeText(linkInput.value).then(doneLabel).catch(() => {});
+        } else {
+            linkInput.select();
+            document.execCommand('copy');
+            doneLabel();
+        }
+    });
+}
+
+function leaveRoom() {
+    stopSpectatorBanner();
+    if (room) {
+        const r = room;
+        room = null;
+        r.leave();
+    }
+    players.clear();
+    playerCharacterMap.clear();
+    winnerId = null;
+    gamePhase = 'lobby';
+    setRoomUrl(null);
+    showScreen('browser');
+}
+
+function stopSpectatorBanner() {
+    const banner = document.getElementById('spectator-banner');
+    if (banner) banner.style.display = 'none';
+}
+
+async function createRoom() {
+    await connectToRoom(() => colyseusClient.create('bomberman', joinOptions()));
+}
+
+async function joinRoomById(roomId) {
+    const ok = await connectToRoom(() => colyseusClient.joinById(roomId, joinOptions()));
+    if (!ok) {
+        alert('Could not join that room — it may no longer exist.');
+        setRoomUrl(null);
+        showScreen('browser');
+    }
+}
+
+// ── Room connection ─────────────────────────────────────────────────
+
+async function connectToRoom(joinFn) {
+    try {
+        room = await joinFn();
 
         playerId = room.sessionId;
-        console.log('Connected to Bomberman room:', playerId);
+        console.log('Connected to Bomberman room:', room.roomId, 'as', playerId);
 
         myColor = null;
         const yourColorDiv = document.getElementById('your-color');
         if (yourColorDiv) yourColorDiv.style.display = 'none';
 
+        // Make the room shareable: put the room id in the URL and share box
+        setRoomUrl(room.roomId);
+        const linkInput = document.getElementById('room-link');
+        if (linkInput) linkInput.value = window.location.href;
+        showScreen('waiting');
+
         // ── State change listeners ──────────────────────────────────
 
         // Sync state on every patch from the server
         room.onStateChange((state) => {
+            gamePhase = state.phase || 'lobby';
+            hostId = state.hostId || '';
+
             // Sync arrays from schema state
             bombPickups = schemaArrayToPlain(state.bombPickups, ['x', 'y', 'pickupType']);
             powerups = schemaArrayToPlain(state.powerups, ['x', 'y', 'pickupType']);
@@ -223,6 +410,8 @@ async function startGame() {
                     localPlayer.lives = serverPlayer.lives;
                     localPlayer.killedBy = serverPlayer.killedBy;
                     localPlayer.protectedUntil = serverPlayer.protectedUntil;
+                    localPlayer.ready = serverPlayer.ready;
+                    localPlayer.isSpectator = serverPlayer.isSpectator;
                 } else {
                     players.set(id, {
                         id: id,
@@ -247,6 +436,8 @@ async function startGame() {
                         lives: serverPlayer.lives,
                         killedBy: serverPlayer.killedBy,
                         protectedUntil: serverPlayer.protectedUntil,
+                        ready: serverPlayer.ready,
+                        isSpectator: serverPlayer.isSpectator,
                     });
                 }
             });
@@ -268,14 +459,10 @@ async function startGame() {
             }
 
             // Winner detection
-            const newWinnerId = state.winnerId || null;
-            if (newWinnerId && !winnerId) {
-                winnerDetectedTime = Date.now();
-            }
-            if (!newWinnerId && winnerId) {
-                winnerDetectedTime = null;
-            }
-            winnerId = newWinnerId;
+            winnerId = state.winnerId || null;
+
+            // Switch between waiting room and game views
+            updateScreens();
         });
 
         // ── Message listeners (sounds, color) ───────────────────────
@@ -326,26 +513,33 @@ async function startGame() {
             console.error('Room error:', code, message);
         });
 
+        const thisRoom = room;
         room.onLeave((code) => {
             console.log('Left room:', code);
+            // Unexpected disconnect (kicked, room disposed, timeout):
+            // go back to the room browser. Intentional leaves already
+            // cleared `room` in leaveRoom().
+            if (room === thisRoom) {
+                room = null;
+                players.clear();
+                winnerId = null;
+                gamePhase = 'lobby';
+                stopSpectatorBanner();
+                setRoomUrl(null);
+                showScreen('browser');
+            }
         });
 
     } catch (e) {
         console.error('Failed to join Bomberman room:', e);
-        return;
+        return false;
     }
 
-    // Reset button listener
-    const resetButton = document.getElementById('resetButton');
-    if (resetButton) {
-        resetButton.addEventListener('click', () => {
-            if (room && playerId) {
-                room.send('resetGame');
-            }
-        });
-    }
+    return true;
+}
 
-    // Music toggle listener
+// One-time music/sound toggle setup
+function setupAudioButtons() {
     const toggleMusicButton = document.getElementById('toggleMusicButton');
     const backgroundMusic = document.getElementById('backgroundMusic');
 
@@ -367,7 +561,6 @@ async function startGame() {
         });
     }
 
-    // Sound effects toggle listener
     const toggleSoundButton = document.getElementById('toggleSoundButton');
     if (toggleSoundButton) {
         toggleSoundButton.textContent = isSoundEnabled ? 'Sound On' : 'Sound Off';
@@ -377,6 +570,72 @@ async function startGame() {
             toggleSoundButton.textContent = isSoundEnabled ? 'Sound On' : 'Sound Off';
             localStorage.setItem('bomberman_sound_enabled', isSoundEnabled);
         });
+    }
+}
+
+// ── Screen / lobby UI updates ───────────────────────────────────────
+
+function updateScreens() {
+    if (!room) return;
+
+    const me = players.get(playerId);
+    amSpectator = !!(me && me.isSpectator);
+    const banner = document.getElementById('spectator-banner');
+
+    if (gamePhase === 'playing') {
+        showScreen('game');
+        if (banner) banner.style.display = amSpectator ? 'block' : 'none';
+    } else {
+        showScreen('waiting');
+        if (banner) banner.style.display = 'none';
+        updateLobbyUI();
+    }
+}
+
+function updateLobbyUI() {
+    const listEl = document.getElementById('lobby-players');
+    const readyBtn = document.getElementById('ready-btn');
+    const startBtn = document.getElementById('start-btn');
+    const statusEl = document.getElementById('lobby-status');
+    if (!listEl) return;
+
+    const me = players.get(playerId);
+    const isHost = playerId === hostId;
+
+    let othersReady = true;
+    let html = '';
+    players.forEach((p, id) => {
+        const isRoomHost = id === hostId;
+        let tag;
+        if (isRoomHost) {
+            tag = '<span class="ready-tag ready-yes">HOST</span>';
+        } else if (p.ready) {
+            tag = '<span class="ready-tag ready-yes">READY</span>';
+        } else {
+            tag = '<span class="ready-tag ready-no">NOT READY</span>';
+            othersReady = false;
+        }
+        const name = escapeHtml(p.playerName || 'Anonymous');
+        html += `<div class="lobby-player"><span>${isRoomHost ? '👑 ' : ''}${name}${id === playerId ? ' (you)' : ''}</span>${tag}</div>`;
+    });
+    listEl.innerHTML = html;
+
+    if (readyBtn) {
+        readyBtn.style.display = isHost ? 'none' : 'block';
+        readyBtn.textContent = (me && me.ready) ? 'Not Ready' : "I'm Ready";
+    }
+    if (startBtn) {
+        startBtn.style.display = isHost ? 'block' : 'none';
+        startBtn.disabled = !othersReady;
+    }
+    if (statusEl) {
+        if (isHost) {
+            statusEl.textContent = othersReady
+                ? (players.size > 1 ? 'Everyone is ready — you can start!' : 'You can start, or wait for others to join.')
+                : 'Waiting for everyone to be ready...';
+        } else {
+            statusEl.textContent = 'Waiting for the host to start the game...';
+        }
     }
 }
 
@@ -395,6 +654,12 @@ function schemaArrayToPlain(schemaArray, fields) {
 }
 
 function draw() {
+    // Nothing to render while in the lobby (canvas is hidden anyway)
+    if (gamePhase !== 'playing') {
+        background(26);
+        return;
+    }
+
     // Draw floor
     drawFloor();
 
@@ -628,30 +893,13 @@ function updateAvatarDisplay() {
 function updateNameDisplay() {
     const nameDisplay = document.getElementById('player-name-display');
     const nameText = document.getElementById('player-name-text');
-    const editNameBtn = document.getElementById('edit-name-btn');
-
     if (nameDisplay && nameText) {
         nameText.textContent = playerName || 'Anonymous';
         nameDisplay.style.display = 'block';
-
-        // Setup edit name button (only once)
-        if (editNameBtn && !editNameBtn.hasAttribute('data-listener-added')) {
-            editNameBtn.setAttribute('data-listener-added', 'true');
-            editNameBtn.addEventListener('click', () => {
-                const newName = prompt('Enter your new name:', playerName);
-                if (newName && newName.trim()) {
-                    playerName = newName.trim();
-                    localStorage.setItem('bomberman_player_name', playerName);
-                    nameText.textContent = playerName;
-
-                    // Send updated name to server
-                    if (room) {
-                        room.send('update_player_name', playerName);
-                    }
-                }
-            });
-        }
     }
+
+    const lobbyName = document.getElementById('lobby-name');
+    if (lobbyName) lobbyName.textContent = playerName || 'Anonymous';
 }
 
 // Advance a player's render position toward its server position using a
@@ -998,18 +1246,7 @@ function drawWinnerMessage() {
     text(message, width / 2, height / 2 - 10);
 
     textSize(16);
-    if (winnerDetectedTime) {
-        const elapsedTime = (Date.now() - winnerDetectedTime) / 1000;
-        const remainingTime = Math.max(0, winDelaySeconds - elapsedTime);
-
-        if (remainingTime > 0) {
-            text(`Next game starts in ${Math.ceil(remainingTime)} seconds...`, width / 2, height / 2 + 30);
-        } else {
-            text("Press any key to restart", width / 2, height / 2 + 30);
-        }
-    } else {
-        text("Press any key to restart", width / 2, height / 2 + 30);
-    }
+    text("Returning to the lobby...", width / 2, height / 2 + 30);
 }
 
 function keyPressed() {
@@ -1028,19 +1265,8 @@ function keyPressed() {
         event.preventDefault();
     }
 
-    // Handle restart if there's a winner
-    if (winnerId) {
-        if (winnerDetectedTime) {
-            const elapsedTime = (Date.now() - winnerDetectedTime) / 1000;
-            if (elapsedTime >= winDelaySeconds) {
-                room.send('requestRestart');
-                winnerDetectedTime = null;
-            }
-        } else {
-            room.send('requestRestart');
-        }
-        return false;
-    }
+    // Game controls only apply during an active game
+    if (!room || gamePhase !== 'playing' || winnerId) return false;
 
     if (!players.has(playerId)) return false;
 
@@ -1097,6 +1323,7 @@ function keyReleased() {
         event.preventDefault();
     }
 
+    if (!room || gamePhase !== 'playing') return false;
     if (!players.has(playerId)) return false;
 
     const localPlayer = players.get(playerId);

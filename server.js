@@ -14,6 +14,22 @@ const colyseusServer = new ColyseusServer({
     }),
     // Mount static files on the transport's Express app
     express: (app) => {
+        // Public listing of all Bomberman rooms for the room browser
+        app.get('/api/rooms', async (req, res) => {
+            try {
+                const rooms = await matchMaker.query({ name: 'bomberman' });
+                res.json(rooms.map(r => ({
+                    roomId: r.roomId,
+                    clients: r.clients,
+                    maxClients: r.maxClients,
+                    metadata: r.metadata || {},
+                })));
+            } catch (e) {
+                console.error('Failed to list rooms:', e);
+                res.status(500).json({ error: 'Failed to list rooms' });
+            }
+        });
+
         app.use(express.static('.'));
     },
 });

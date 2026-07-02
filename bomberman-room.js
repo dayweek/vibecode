@@ -24,6 +24,8 @@ type('string')(Player.prototype, 'killedBy');
 type('number')(Player.prototype, 'lastMoveTime');
 type('boolean')(Player.prototype, 'isMoving');
 type('boolean')(Player.prototype, 'invisible');
+type('boolean')(Player.prototype, 'ready');
+type('boolean')(Player.prototype, 'isSpectator');
 
 class Bomb extends Schema {}
 type('number')(Bomb.prototype, 'x');
@@ -59,6 +61,9 @@ type([Wall])(BombermanState.prototype, 'lavaTiles');
 type('string')(BombermanState.prototype, 'winnerId');
 type('number')(BombermanState.prototype, 'gridWidth');
 type('number')(BombermanState.prototype, 'gridHeight');
+// 'lobby' = waiting room, 'playing' = game in progress
+type('string')(BombermanState.prototype, 'phase');
+type('string')(BombermanState.prototype, 'hostId');
 
 // ── Constants ────────────────────────────────────────────────────────
 
@@ -107,6 +112,8 @@ class BombermanRoom extends Room {
         this.state.winnerId = '';
         this.state.gridWidth = 0;
         this.state.gridHeight = 0;
+        this.state.phase = 'lobby';
+        this.state.hostId = '';
 
         this.maxClients = CONFIG.maxPlayers;
 
@@ -129,9 +136,9 @@ class BombermanRoom extends Room {
         // Hidden bomb flags per destructible wall index (not sent to client)
         this.wallHiddenBombs = [];
 
-        // Initialize grid
-        this.updateGridSize();
-        this.generateEnvironment();
+        // The room starts in the lobby; the grid is sized and generated once
+        // when the host starts the game, and stays fixed for the whole game.
+        this.participantsAtStart = 0;
 
         // Game loop
         this.setSimulationInterval(() => this.updateGameState(), CONFIG.updateInterval);
@@ -188,40 +195,26 @@ class BombermanRoom extends Room {
             const player = this.state.players.get(client.sessionId);
             if (player) {
                 player.playerName = (newName || '').substring(0, 20);
+                this.updateMetadata();
             }
         });
 
-        this.onMessage('resetGame', (client) => {
-            const resetInitiatorId = client.sessionId;
-
-            // Disconnect all other players
-            for (const [id, _player] of this.state.players) {
-                if (id !== resetInitiatorId) {
-                    const otherClient = this.clients.find(c => c.sessionId === id);
-                    if (otherClient) {
-                        this.usedColors.delete(_player.color);
-                        otherClient.leave();
-                    }
-                }
-            }
-
-            // Clear and regenerate
-            this.updateGridSize();
-            this.clearGameObjects();
-            this.generateEnvironment();
-
-            // Reset the initiator
-            const playerToKeep = this.state.players.get(resetInitiatorId);
-            if (playerToKeep) {
-                const pos = this.getRandomEmptyPosition();
-                this.resetPlayer(playerToKeep, pos);
-            }
+        this.onMessage('setReady', (client, ready) => {
+            if (this.state.phase !== 'lobby') return;
+            const player = this.state.players.get(client.sessionId);
+            if (player) player.ready = !!ready;
+            const internal = this.playerInternal.get(client.sessionId);
+            if (internal) internal.lastActivityTime = Date.now();
         });
 
-        this.onMessage('requestRestart', (client) => {
-            if (this.state.winnerId) {
-                this.restartGame();
+        this.onMessage('startGame', (client) => {
+            if (this.state.phase !== 'lobby') return;
+            if (client.sessionId !== this.state.hostId) return;
+            // Every player except the host must have confirmed ready
+            for (const [id, p] of this.state.players) {
+                if (id !== this.state.hostId && !p.ready) return;
             }
+            this.startGame();
         });
     }
 
@@ -259,9 +252,9 @@ class BombermanRoom extends Room {
             }
         }
 
-        // Check for reconnection
+        // Check for reconnection (only meaningful while a game is running)
         const savedPlayer = this.persistentPlayers.get(persistentId);
-        if (savedPlayer && savedPlayer.alive) {
+        if (savedPlayer && savedPlayer.alive && this.state.phase === 'playing') {
             console.log(`Restoring player ${persistentId}`);
             this.sessionToPersistentId.set(client.sessionId, persistentId);
 
@@ -288,6 +281,8 @@ class BombermanRoom extends Room {
             player.lastMoveTime = Date.now();
             player.isMoving = false;
             player.invisible = false;
+            player.ready = false;
+            player.isSpectator = false;
 
             this.state.players.set(client.sessionId, player);
             this.playerInternal.set(client.sessionId, {
@@ -303,14 +298,14 @@ class BombermanRoom extends Room {
             client.send('playerColor', savedPlayer.color);
             this.broadcast('playNewSound');
         } else {
-            // New player
+            // New player: waits in the lobby, or spectates if a game is running.
+            // They get a position only when a game starts.
             const color = this.getAvailableColor();
             this.usedColors.add(color);
 
-            const pos = this.getRandomEmptyPosition();
             const player = new Player();
-            player.x = pos.x;
-            player.y = pos.y;
+            player.x = 0;
+            player.y = 0;
             player.color = color;
             player.playerName = playerName;
             player.maxBombs = 1;
@@ -318,13 +313,15 @@ class BombermanRoom extends Room {
             player.bombRange = CONFIG.baseExplosionRange;
             player.speedBoosts = 0;
             player.invisibleUntil = 0;
-            player.protectedUntil = Date.now() + 2000;
+            player.protectedUntil = 0;
             player.lives = 0;
-            player.alive = true;
+            player.alive = false;
             player.killedBy = '';
             player.lastMoveTime = Date.now();
             player.isMoving = false;
             player.invisible = false;
+            player.ready = false;
+            player.isSpectator = this.state.phase === 'playing';
 
             this.state.players.set(client.sessionId, player);
             this.sessionToPersistentId.set(client.sessionId, persistentId);
@@ -347,6 +344,12 @@ class BombermanRoom extends Room {
             client.send('playerColor', color);
             this.broadcast('playNewSound');
         }
+
+        // First player in becomes host
+        if (!this.state.hostId || !this.state.players.has(this.state.hostId)) {
+            this.state.hostId = client.sessionId;
+        }
+        this.updateMetadata();
     }
 
     async onLeave(client, consented) {
@@ -390,12 +393,112 @@ class BombermanRoom extends Room {
         this.state.players.delete(sessionId);
         this.playerInternal.delete(sessionId);
         this.sessionToPersistentId.delete(sessionId);
+
+        // Reassign host if the host left
+        if (this.state.hostId === sessionId) {
+            let newHost = '';
+            for (const [id] of this.state.players) { newHost = id; break; }
+            this.state.hostId = newHost;
+        }
+        this.updateMetadata();
+    }
+
+    // ── Lobby / game lifecycle ────────────────────────────────────────
+
+    updateMetadata() {
+        const host = this.state.players.get(this.state.hostId);
+        this.setMetadata({
+            hostName: host ? (host.playerName || 'Anonymous') : '',
+            phase: this.state.phase,
+            playerCount: this.state.players.size,
+        });
+    }
+
+    startGame() {
+        console.log('Starting Bomberman game...');
+        this.clearGameObjects();
+
+        // Grid size is fixed for the whole game, based on player count at start
+        const playerCount = this.state.players.size;
+        const { cols, rows } = this.calculateGridSize(playerCount);
+        this.cols = cols;
+        this.rows = rows;
+        this.state.gridWidth = cols * CONFIG.scale;
+        this.state.gridHeight = rows * CONFIG.scale;
+
+        this.generateEnvironment();
+        this.participantsAtStart = playerCount;
+
+        for (const [sessionId, player] of this.state.players) {
+            player.isSpectator = false;
+            player.ready = false;
+            const pos = this.getRandomEmptyPosition();
+            this.resetPlayer(player, pos);
+            const internal = this.playerInternal.get(sessionId);
+            if (internal) {
+                internal.currentDirections = [];
+                internal.pendingDirections = [];
+                internal.lastStepDirection = null;
+                internal.pendingBomb = false;
+                internal.lastMoveTime = Date.now();
+                internal.lastActivityTime = Date.now();
+            }
+            const persistentId = this.sessionToPersistentId.get(sessionId);
+            if (persistentId) {
+                this.persistentPlayers.set(persistentId, this.serializePlayer(player));
+            }
+        }
+
+        this.state.phase = 'playing';
+        this.updateMetadata();
+    }
+
+    returnToLobby() {
+        console.log('Returning everyone to the waiting room...');
+        if (this.restartTimeout) {
+            clearTimeout(this.restartTimeout);
+            this.restartTimeout = null;
+        }
+
+        this.clearGameObjects();
+        this.state.indestructibleWalls.splice(0, this.state.indestructibleWalls.length);
+        this.state.destructibleWalls.splice(0, this.state.destructibleWalls.length);
+        this.wallHiddenBombs = [];
+        this.wallLookup.clear();
+        this.indestructibleLookup.clear();
+
+        for (const [sessionId, player] of this.state.players) {
+            player.ready = false;
+            player.isSpectator = false;
+            player.alive = false;
+            player.killedBy = '';
+            player.isMoving = false;
+            const internal = this.playerInternal.get(sessionId);
+            if (internal) {
+                internal.currentDirections = [];
+                internal.pendingDirections = [];
+                internal.pendingBomb = false;
+                internal.lastActivityTime = Date.now();
+            }
+        }
+
+        // Invalidate mid-game reconnection snapshots: the game they belonged
+        // to is over, so returning players join the lobby fresh.
+        for (const [, saved] of this.persistentPlayers) {
+            saved.alive = false;
+        }
+
+        this.state.phase = 'lobby';
+        this.updateMetadata();
     }
 
     // ── Game loop ─────────────────────────────────────────────────────
 
     updateGameState() {
         const now = Date.now();
+
+        // Nothing to simulate while waiting in the lobby
+        if (this.state.phase !== 'playing') return;
 
         // Process pending direction changes from message handlers
         for (const [sessionId, internal] of this.playerInternal) {
@@ -663,22 +766,29 @@ class BombermanRoom extends Room {
             }
         }
 
-        // ── Win condition ────────────────────────────────────────────
-        if (this.state.players.size > 1) {
+        // ── Win condition (spectators don't count) ───────────────────
+        if (!this.state.winnerId) {
+            let participantCount = 0;
             let aliveCount = 0;
             let lastAliveId = '';
             for (const [id, p] of this.state.players) {
+                if (p.isSpectator) continue;
+                participantCount++;
                 if (p.alive) { aliveCount++; lastAliveId = id; }
             }
 
-            if (aliveCount === 1 && !this.state.winnerId) {
+            if (participantCount === 0) {
+                // Only spectators left — nothing to watch, back to the lobby
+                this.returnToLobby();
+            } else if (aliveCount === 1 && this.participantsAtStart > 1) {
                 this.state.winnerId = lastAliveId;
                 console.log(`Player ${lastAliveId} wins!`);
                 this.broadcast('playWinSound');
-            } else if (aliveCount === 0 && !this.state.winnerId) {
+                this.restartTimeout = setTimeout(() => this.returnToLobby(), 5000);
+            } else if (aliveCount === 0) {
                 console.log('All players eliminated - Draw!');
                 this.state.winnerId = 'draw';
-                this.restartTimeout = setTimeout(() => this.restartGame(), 3000);
+                this.restartTimeout = setTimeout(() => this.returnToLobby(), 3000);
             }
         }
 
@@ -762,22 +872,6 @@ class BombermanRoom extends Room {
             cols: Math.floor(baseCols * scaleFactor),
             rows: Math.floor(baseRows * scaleFactor)
         };
-    }
-
-    updateGridSize() {
-        const playerCount = this.state.players.size;
-        const { cols, rows } = this.calculateGridSize(playerCount);
-        const newWidth = cols * CONFIG.scale;
-        const newHeight = rows * CONFIG.scale;
-
-        if (newWidth !== this.state.gridWidth || newHeight !== this.state.gridHeight) {
-            this.state.gridWidth = newWidth;
-            this.state.gridHeight = newHeight;
-            this.cols = cols;
-            this.rows = rows;
-            return true;
-        }
-        return false;
     }
 
     generateEnvironment() {
@@ -1029,31 +1123,6 @@ class BombermanRoom extends Room {
         this.lavaLookup.clear();
     }
 
-    restartGame() {
-        console.log('Restarting Bomberman game...');
-        if (this.restartTimeout) {
-            clearTimeout(this.restartTimeout);
-            this.restartTimeout = null;
-        }
-
-        this.clearGameObjects();
-        this.updateGridSize();
-        this.generateEnvironment();
-
-        for (const [sessionId, player] of this.state.players) {
-            const pos = this.getRandomEmptyPosition();
-            this.resetPlayer(player, pos);
-            const internal = this.playerInternal.get(sessionId);
-            if (internal) {
-                internal.currentDirections = [];
-                internal.pendingDirections = [];
-                internal.lastStepDirection = null;
-                internal.lastMoveTime = Date.now();
-                internal.lastActivityTime = Date.now();
-            }
-        }
-    }
-
     serializePlayer(player) {
         return {
             x: player.x, y: player.y,
@@ -1070,8 +1139,13 @@ class BombermanRoom extends Room {
     }
 
     checkInactivity() {
+        // Only kick idle players who are actively in a game; people waiting
+        // in the lobby or spectating aren't expected to send input.
+        if (this.state.phase !== 'playing') return;
         const now = Date.now();
         for (const [sessionId, internal] of this.playerInternal) {
+            const player = this.state.players.get(sessionId);
+            if (!player || !player.alive || player.isSpectator) continue;
             if (now - internal.lastActivityTime > CONFIG.inactivityTimeout) {
                 console.log(`Bomberman player ${sessionId} timed out`);
                 const client = this.clients.find(c => c.sessionId === sessionId);

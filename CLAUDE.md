@@ -61,15 +61,17 @@ Multiplayer: open the URL in multiple tabs/devices, or share the host's address,
 
 ### Bomberman Game
 
-#### Backend (bomberman-server.js)
+#### Backend (bomberman-room.js)
 - Game loop running at 100ms intervals
-- **Dynamic grid sizing** based on player count:
-  - 1-4 players: 16x14 grid (480x420px)
-  - 5-12 players: 24x20 grid (720x600px)
-  - 13-20 players: 32x27 grid (960x810px)
-- Grid automatically resizes when players join/leave
-- 60-second inactivity timeout
-- Tile-based movement at 300ms intervals
+- **Waiting room (lobby) flow**:
+  - Anyone can create a room from the public room browser and becomes its host
+  - Rooms are listed publicly via `GET /api/rooms` and joinable by shareable link (`bomberman.html?room=<roomId>`)
+  - Players in the lobby toggle a Ready flag; the host can start the game only when all other players are ready
+  - Players joining mid-game become spectators and play in the next game
+  - When someone wins (or on a draw), everyone returns to the waiting room
+- **Grid sizing** is computed once when the host starts the game (based on player count) and stays fixed for the whole game
+- 60-second inactivity timeout (only for alive players during a game)
+- Tile-based movement at ~200ms intervals
 
 #### Frontend (bomberman-sketch.js + bomberman.html)
 - Available at `http://localhost:3000/bomberman.html`
