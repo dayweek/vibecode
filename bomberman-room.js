@@ -1,4 +1,4 @@
-const { Room } = require('colyseus');
+const { Room, CloseCode } = require('colyseus');
 const { Schema, type, ArraySchema, MapSchema } = require('@colyseus/schema');
 
 // ── Schema definitions ──────────────────────────────────────────────
@@ -212,6 +212,34 @@ class BombermanRoom extends Room {
 
         const persistentId = options.persistentId || '';
         const playerName = (options.playerName || '').substring(0, 20);
+
+        // If this persistentId is already bound to an active session (e.g. the
+        // same browser opened a second tab), take over that player: remove the
+        // old session so only one player exists per persistentId.
+        if (persistentId) {
+            for (const [existingSessionId, pid] of this.sessionToPersistentId) {
+                if (pid === persistentId && existingSessionId !== client.sessionId) {
+                    const existingPlayer = this.state.players.get(existingSessionId);
+                    if (existingPlayer) {
+                        if (existingPlayer.alive) {
+                            this.persistentPlayers.set(persistentId, this.serializePlayer(existingPlayer));
+                        } else {
+                            this.usedColors.delete(existingPlayer.color);
+                        }
+                    }
+                    // Remove player before leave() so onLeave's reconnection
+                    // path doesn't resurrect the old session.
+                    this.state.players.delete(existingSessionId);
+                    this.playerInternal.delete(existingSessionId);
+                    this.sessionToPersistentId.delete(existingSessionId);
+                    // CONSENTED close code, otherwise the kicked tab's SDK
+                    // auto-reconnects and the two tabs kick each other forever.
+                    const oldClient = this.clients.find(c => c.sessionId === existingSessionId);
+                    if (oldClient) oldClient.leave(CloseCode.CONSENTED);
+                    break;
+                }
+            }
+        }
 
         // Check for reconnection
         const savedPlayer = this.persistentPlayers.get(persistentId);
@@ -779,10 +807,17 @@ class BombermanRoom extends Room {
         }
 
         // Edge pocket walls
+        // Set of positions that must not receive pocket/destructible walls:
+        // indestructible walls plus lava tiles (so walls aren't placed on top of
+        // lava, which would make the lava unreachable and un-lethal).
         const indestructibleSet = new Set();
         for (let i = 0; i < this.state.indestructibleWalls.length; i++) {
             const w = this.state.indestructibleWalls[i];
             indestructibleSet.add(`${w.x},${w.y}`);
+        }
+        for (let i = 0; i < this.state.lavaTiles.length; i++) {
+            const l = this.state.lavaTiles[i];
+            indestructibleSet.add(`${l.x},${l.y}`);
         }
 
         const pocketWallDistance = 4;
