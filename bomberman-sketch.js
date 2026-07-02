@@ -214,12 +214,25 @@ function escapeHtml(str) {
     }[c]));
 }
 
+// Pick a stable decorative character sprite for a room card
+function roomSpriteFile(roomId) {
+    let h = 0;
+    for (let i = 0; i < roomId.length; i++) {
+        h = (h * 31 + roomId.charCodeAt(i)) >>> 0;
+    }
+    return 'bomberman-assets/characters/' + characterFiles[h % characterFiles.length];
+}
+
 function renderRoomList(rooms) {
     const listEl = document.getElementById('room-list');
     if (!listEl) return;
 
     if (!rooms || rooms.length === 0) {
-        listEl.innerHTML = '<p class="muted">No rooms yet — create one and share the link!</p>';
+        listEl.innerHTML =
+            '<div class="room-empty">' +
+            '<img src="bomberman-assets/weapon_bomb.png" alt="">' +
+            'No rooms yet.<br>Create one and share the link.' +
+            '</div>';
         return;
     }
 
@@ -230,16 +243,26 @@ function renderRoomList(rooms) {
         const item = document.createElement('div');
         item.className = 'room-item';
 
-        const info = document.createElement('div');
-        info.innerHTML =
-            `<div class="room-info">${escapeHtml(meta.hostName || 'Unknown')}'s room</div>` +
-            `<div class="room-meta">${r.clients}/${r.maxClients} players &middot; ${inGame ? '🎮 Game in progress' : '🕐 Waiting for players'}</div>`;
+        const sprite = document.createElement('img');
+        sprite.className = 'room-sprite';
+        sprite.alt = '';
+        sprite.src = roomSpriteFile(r.roomId);
+
+        const body = document.createElement('div');
+        body.className = 'room-body';
+        body.innerHTML =
+            `<div class="room-name">${escapeHtml(meta.hostName || 'Unknown')}'s room</div>` +
+            `<div class="room-meta">${r.clients}/${r.maxClients} bombers &middot; ` +
+            (inGame ? '<span class="tag tag-live">In game</span>' : '<span class="tag tag-wait">Waiting</span>') +
+            `</div>`;
 
         const joinBtn = document.createElement('button');
+        joinBtn.className = 'px-btn' + (inGame ? '' : ' gold');
         joinBtn.textContent = inGame ? 'Watch' : 'Join';
         joinBtn.addEventListener('click', () => joinRoomById(r.roomId));
 
-        item.appendChild(info);
+        item.appendChild(sprite);
+        item.appendChild(body);
         item.appendChild(joinBtn);
         listEl.appendChild(item);
     });
@@ -606,23 +629,41 @@ function updateLobbyUI() {
     let html = '';
     players.forEach((p, id) => {
         const isRoomHost = id === hostId;
+        const isSetReady = isRoomHost || p.ready;
+        if (!isSetReady) othersReady = false;
+
+        // Same sprite assignment as in-game rendering, so the lobby shows
+        // the character you'll actually spawn as
+        if (!playerCharacterMap.has(id)) {
+            playerCharacterMap.set(id, nextCharacterIndex % characterFiles.length);
+            nextCharacterIndex++;
+        }
+        const spriteFile = 'bomberman-assets/characters/' + characterFiles[playerCharacterMap.get(id) % characterFiles.length];
+
         let tag;
         if (isRoomHost) {
-            tag = '<span class="ready-tag ready-yes">HOST</span>';
+            tag = '<span class="tag tag-host">Host</span>';
         } else if (p.ready) {
-            tag = '<span class="ready-tag ready-yes">READY</span>';
+            tag = '<span class="tag tag-ready">Ready</span>';
         } else {
-            tag = '<span class="ready-tag ready-no">NOT READY</span>';
-            othersReady = false;
+            tag = '<span class="tag tag-wait">Waiting</span>';
         }
+
         const name = escapeHtml(p.playerName || 'Anonymous');
-        html += `<div class="lobby-player"><span>${isRoomHost ? '👑 ' : ''}${name}${id === playerId ? ' (you)' : ''}</span>${tag}</div>`;
+        html +=
+            `<div class="spawn-pad ${isSetReady ? 'is-ready' : 'is-waiting'}">` +
+            `<div class="pad-tile"><img src="${spriteFile}" alt=""></div>` +
+            `<div class="pad-name">${name}${id === playerId ? ' <span class="you">(you)</span>' : ''}</div>` +
+            tag +
+            `</div>`;
     });
     listEl.innerHTML = html;
 
     if (readyBtn) {
         readyBtn.style.display = isHost ? 'none' : 'block';
-        readyBtn.textContent = (me && me.ready) ? 'Not Ready' : "I'm Ready";
+        const amReady = !!(me && me.ready);
+        readyBtn.textContent = amReady ? 'Cancel ready' : "I'm Ready";
+        readyBtn.className = amReady ? 'px-btn' : 'px-btn green';
     }
     if (startBtn) {
         startBtn.style.display = isHost ? 'block' : 'none';
@@ -631,10 +672,10 @@ function updateLobbyUI() {
     if (statusEl) {
         if (isHost) {
             statusEl.textContent = othersReady
-                ? (players.size > 1 ? 'Everyone is ready — you can start!' : 'You can start, or wait for others to join.')
-                : 'Waiting for everyone to be ready...';
+                ? (players.size > 1 ? "Everyone's ready. Light the fuse!" : 'You can start solo, or wait for friends.')
+                : 'Waiting for everyone to ready up...';
         } else {
-            statusEl.textContent = 'Waiting for the host to start the game...';
+            statusEl.textContent = 'Waiting for the host to start...';
         }
     }
 }
