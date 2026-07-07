@@ -4,133 +4,59 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-This is a real-time multiplayer gaming platform featuring two games: **Snake** and **Bomberman**. Both are built with Node.js, Express, Socket.IO, and p5.js, sharing server infrastructure while using separate Socket.IO namespaces.
+A real-time multiplayer gaming platform with two games — **Bomberman** and **Snake** — played through a single room system. Built with Node.js, **Colyseus** (`colyseus` + `@colyseus/ws-transport`), Express (static files + room-list API), and p5.js on the client.
+
+There is one entry point: `/` shows a public room browser. Anyone can create a room (becoming its host), and inside the room's lobby the host picks which game to play. There are no per-game URLs.
 
 ## Development Commands
 
-- `npm start` - Start the production server (both games)
+- `npm start` - Start the server
 - `npm run dev` - Start development server with nodemon for auto-reload
 - `npm install` - Install dependencies
 
-## Running Bomberman
+Open **http://localhost:3000/** (override port with the `PORT` env var). Multiplayer: open the URL in multiple tabs/devices, or share a room link (`/?room=<roomId>`).
 
-Bomberman runs on the same server as Snake — there is no separate command or process.
+## File Map
 
-1. `npm install` — install dependencies (first time only).
-2. `npm start` (or `npm run dev` for auto-reload) — starts the Colyseus server on port `3000` (override with the `PORT` env var).
-3. Open **http://localhost:3000/bomberman.html** in the browser.
+- `server.js` — Colyseus server; serves static files, exposes `GET /api/rooms` (public room list), defines the single `game` room type
+- `game-room.js` — `GameRoom`: lobby lifecycle + both games' server logic and the unified Colyseus schema (`GameState`, `Player`)
+- `index.html` — the whole client UI: welcome modal (name), room browser, lobby, and in-game HUD
+- `game-sketch.js` — p5.js client: lobby wiring, state sync, and per-game rendering/input
+- `bomberman-assets/` — sprites and sounds for Bomberman rendering
 
-Multiplayer: open the URL in multiple tabs/devices, or share the host's address, to join the same room. Server entry point is `server.js`, which defines the `bomberman` room from `bomberman-room.js`; the client is `bomberman.html` + `bomberman-sketch.js`.
+## Room Lifecycle (both games)
 
-> Note: The stack has migrated from Socket.IO to **Colyseus** (`colyseus` + `@colyseus/ws-transport`). Game logic now lives in room classes (`bomberman-room.js`, `snake-room.js`), not `bomberman-server.js`. Some sections below still describe the older Socket.IO design.
+- One Colyseus room type: `game`. Room state has `phase` (`'lobby'` | `'playing'`) and `gameType` (`'bomberman'` | `'snake'`).
+- Anyone can create a room from the room browser and becomes its host; rooms are listed via `GET /api/rooms` (metadata: `hostName`, `phase`, `playerCount`, `gameType`) and joinable via `/?room=<roomId>`.
+- In the lobby, the **host selects the game** (`setGameType` message; server validates host + lobby phase). Non-hosts see the selection but can't change it.
+- Non-host players toggle Ready (`setReady`); the host can start (`startGame`) only when all others are ready.
+- Players joining mid-game become spectators and play in the next game.
+- When someone wins (or on a draw), everyone returns to the lobby after a short delay (`returnToLobby`).
+- Reconnection: clients send a `persistentId` (localStorage); alive Bomberman players can reconnect mid-game. Opening a second tab with the same `persistentId` kicks the first session.
+- 60-second inactivity timeout for alive players during a game; lobby/spectators are never kicked.
 
-## Architecture
+## Bomberman
 
-### Backend (server.js)
-- Express server serving static files and handling HTTP requests
-- Socket.IO server managing real-time multiplayer communication for both games
-- Two separate game instances:
-  - Snake game on default namespace (`/`)
-  - Bomberman game on `/bomberman` namespace
-- Server-authoritative game loops with 50-100ms update intervals
-- Inactivity timeouts to clean up idle players
-- Shared color assignment system (20 predefined colors)
+- Server loop at 100ms; tile-based movement (32px tiles) at ~195ms intervals, faster with speed boosts
+- Grid size is computed once when the host starts the game (based on player count) and stays fixed for that game
+- Held-key movement: client sends `setDirections` with all held directions; server combines them (staircase movement around obstacles)
+- Space bar places bombs (`placeBomb`): 3s fuse, cross-pattern explosion sized by `bombRange`, chain reactions, 0.5s explosion duration
+- Destructible walls drop hidden bomb pickups (raise simultaneous-bomb limit) or powerups: flame (range), speed, invisibility, extra life, or spawn lava
+- Lava tiles kill instantly; explosions kill unless the player has lives/spawn protection
+- Last participant alive wins (solo games have no win check — they end when the player dies or leaves)
 
-### Snake Game
+## Snake
 
-#### Backend (server.js)
-- Game loop running at 50ms intervals (20fps)
-- Player movement speed increases with score using exponential decay
-- Food generation with collision avoidance
-- Win condition at 20 points
-- 20-second inactivity timeout
+- Runs in the same room/loop; fixed 800x800 grid, 20px scale
+- Single keypress steering (`direction` message); server prevents 180° turns; base move interval 200ms, faster with score (`0.95^score`)
+- Screen edges wrap; eating food grows the snake and increments score
+- Colliding with any snake (including self) respawns you at score 0
+- First to 20 points wins → everyone returns to the lobby
 
-#### Frontend (sketch.js + index.html)
-- Available at `http://localhost:3000/`
-- p5.js canvas-based rendering (800x800px)
-- Arrow key controls for snake movement
-- Background music and sound effects (eat, die, new player, win)
-- Winner detection with restart delay
+## Audio Files
 
-#### Game Mechanics
-- Grid-based movement (20px scale)
-- Screen wrapping (snakes wrap around edges)
-- Score-based speed increase using `speedFactor = 0.95`
-- Collision with other snakes or self causes reset
-- Players grow by eating food
-
-### Bomberman Game
-
-#### Backend (bomberman-room.js)
-- Game loop running at 100ms intervals
-- **Waiting room (lobby) flow**:
-  - Anyone can create a room from the public room browser and becomes its host
-  - Rooms are listed publicly via `GET /api/rooms` and joinable by shareable link (`bomberman.html?room=<roomId>`)
-  - Players in the lobby toggle a Ready flag; the host can start the game only when all other players are ready
-  - Players joining mid-game become spectators and play in the next game
-  - When someone wins (or on a draw), everyone returns to the waiting room
-- **Grid sizing** is computed once when the host starts the game (based on player count) and stays fixed for the whole game
-- 60-second inactivity timeout (only for alive players during a game)
-- Tile-based movement at ~200ms intervals
-
-#### Frontend (bomberman-sketch.js + bomberman.html)
-- Available at `http://localhost:3000/bomberman.html`
-- p5.js canvas with dynamic resizing
-- Continuous movement (hold arrow key to keep moving)
-- Space bar to place bombs
-- Scrolling disabled for better UX
-
-#### Game Mechanics
-- **Tile-based grid** (30px per tile)
-- **Player spawning**: 8 spawn points distributed across corners and edges
-  - Players distributed evenly across spawn points
-  - L-shaped safe zones at each spawn (4 tiles horizontal + 4 tiles vertical)
-- **Movement**: Players can pass through each other but not through walls or bombs
-- **Walls**:
-  - Indestructible walls at even row/even col positions (excluding edges)
-  - Destructible walls randomly placed (40% density)
-  - 25% of destructible walls contain hidden bomb pickups
-- **Bombs**:
-  - Players start with 1 bomb
-  - Bomb pickups increase **simultaneous bomb limit** (not consumed)
-  - 3-second fuse before explosion
-  - Cross-pattern explosion (2 tiles in each direction)
-  - Explosions destroy destructible walls and stop at indestructible walls
-  - 0.5-second explosion duration
-- **Bomb System**:
-  - `maxBombs`: Maximum bombs that can be placed simultaneously
-  - `activeBombs`: Currently placed bombs
-  - Can place bombs up to limit, which frees up when they explode
-- **Death**: Players die when caught in explosions
-- **No initial pickups**: Bombs only drop from destroying destructible walls
-
-### Audio Files
-Both games use audio files:
-- `Pixelated Love.mp3` - Background music (loops)
-- `eat.mp3` - Food/pickup consumption sound
-- `die.mp3` - Death sound
-- `new.mp3` - New player joined sound
-- `win.mp3` - Victory sound
+`Pixelated Love.mp3` (music), `eat.mp3`, `die.mp3`, `new.mp3`, `win.mp3`, plus explosion/level-up sounds in `bomberman-assets/sound/`. Sound-effect toggle is persisted in localStorage.
 
 ## Deployment
 
 Uses Render.com for deployment (render.yaml configuration included).
-
-## Key Implementation Details
-
-### Snake Game
-- Server maintains authoritative game state in `gameState` object
-- Players stored in a Map with socket.id as key
-- Movement timing controlled server-side with `lastMoveTime` tracking
-- Food spawning includes collision checking
-- Pending direction system prevents 180-degree turns
-
-### Bomberman Game
-- Uses Socket.IO namespace `/bomberman` to isolate from Snake game
-- **Dynamic grid sizing** recalculates on player join/disconnect
-- Server maintains authoritative bomb and explosion state
-- Continuous movement via `moveStart`/`moveStop` events
-- Safe spawn zones prevent immediate death from first bomb
-- Wall generation ensures all areas accessible after destroying destructible walls
-- Bomb collision prevents players from walking through bombs
-- Players can walk through each other for better gameplay

@@ -1,8 +1,7 @@
 const express = require('express');
 const { Server: ColyseusServer, matchMaker } = require('colyseus');
 const { WebSocketTransport } = require('@colyseus/ws-transport');
-const { SnakeRoom } = require('./snake-room');
-const { BombermanRoom } = require('./bomberman-room');
+const { GameRoom } = require('./game-room');
 
 const PORT = process.env.PORT || 3000;
 
@@ -14,10 +13,10 @@ const colyseusServer = new ColyseusServer({
     }),
     // Mount static files on the transport's Express app
     express: (app) => {
-        // Public listing of all Bomberman rooms for the room browser
+        // Public listing of all rooms for the room browser
         app.get('/api/rooms', async (req, res) => {
             try {
-                const rooms = await matchMaker.query({ name: 'bomberman' });
+                const rooms = await matchMaker.query({ name: 'game' });
                 res.json(rooms.map(r => ({
                     roomId: r.roomId,
                     clients: r.clients,
@@ -34,12 +33,11 @@ const colyseusServer = new ColyseusServer({
     },
 });
 
-// Define rooms
-colyseusServer.define('snake', SnakeRoom);
-colyseusServer.define('bomberman', BombermanRoom);
+// One generic room type; the host picks the game (snake or bomberman)
+// inside the room's lobby.
+colyseusServer.define('game', GameRoom);
 
 colyseusServer.listen(PORT).then(() => {
     console.log(`Server is running on port ${PORT}`);
-    console.log(`Snake game available at http://localhost:${PORT}/`);
-    console.log(`Bomberman game available at http://localhost:${PORT}/bomberman.html`);
+    console.log(`Room browser available at http://localhost:${PORT}/`);
 });

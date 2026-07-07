@@ -16,7 +16,13 @@ let directionKeys = []; // Track order of pressed direction keys
 
 // Lobby state
 let gamePhase = 'lobby'; // 'lobby' or 'playing' (synced from server)
+let gameType = 'bomberman'; // 'bomberman' or 'snake' (synced from server)
 let hostId = '';
+
+// Snake state
+let snakeFood = [];
+const SNAKE_SCL = 20; // Snake tile size
+const SNAKE_TICK = 100; // Server update interval for head interpolation
 let amSpectator = false;
 let roomPollInterval = null;
 let lobbyButtonsInitialized = false;
@@ -250,9 +256,10 @@ function renderRoomList(rooms) {
 
         const body = document.createElement('div');
         body.className = 'room-body';
+        const gameLabel = meta.gameType === 'snake' ? '🐍 Snake' : '💣 Bomberman';
         body.innerHTML =
             `<div class="room-name">${escapeHtml(meta.hostName || 'Unknown')}'s room</div>` +
-            `<div class="room-meta">${r.clients}/${r.maxClients} bombers &middot; ` +
+            `<div class="room-meta">${gameLabel} &middot; ${r.clients}/${r.maxClients} players &middot; ` +
             (inGame ? '<span class="tag tag-live">In game</span>' : '<span class="tag tag-wait">Waiting</span>') +
             `</div>`;
 
@@ -274,6 +281,16 @@ function setupLobbyButtons() {
 
     const createBtn = document.getElementById('create-room-btn');
     if (createBtn) createBtn.addEventListener('click', createRoom);
+
+    // Game selector in the lobby (host only; server validates too)
+    const gameBombermanBtn = document.getElementById('lobby-game-bomberman');
+    if (gameBombermanBtn) gameBombermanBtn.addEventListener('click', () => {
+        if (room) room.send('setGameType', 'bomberman');
+    });
+    const gameSnakeBtn = document.getElementById('lobby-game-snake');
+    if (gameSnakeBtn) gameSnakeBtn.addEventListener('click', () => {
+        if (room) room.send('setGameType', 'snake');
+    });
 
     const readyBtn = document.getElementById('ready-btn');
     if (readyBtn) readyBtn.addEventListener('click', () => {
@@ -344,7 +361,7 @@ function stopSpectatorBanner() {
 }
 
 async function createRoom() {
-    await connectToRoom(() => colyseusClient.create('bomberman', joinOptions()));
+    await connectToRoom(() => colyseusClient.create('game', joinOptions()));
 }
 
 async function joinRoomById(roomId) {
@@ -380,6 +397,7 @@ async function connectToRoom(joinFn) {
         // Sync state on every patch from the server
         room.onStateChange((state) => {
             gamePhase = state.phase || 'lobby';
+            gameType = state.gameType || 'bomberman';
             hostId = state.hostId || '';
 
             // Sync arrays from schema state
@@ -390,6 +408,7 @@ async function connectToRoom(joinFn) {
             indestructibleWalls = schemaArrayToPlain(state.indestructibleWalls, ['x', 'y']);
             destructibleWalls = schemaArrayToPlain(state.destructibleWalls, ['x', 'y']);
             lavaTiles = schemaArrayToPlain(state.lavaTiles, ['x', 'y']);
+            snakeFood = state.food ? schemaArrayToPlain(state.food, ['x', 'y']) : [];
 
             // Sync players from MapSchema
             const currentIds = new Set();
@@ -435,6 +454,7 @@ async function connectToRoom(joinFn) {
                     localPlayer.protectedUntil = serverPlayer.protectedUntil;
                     localPlayer.ready = serverPlayer.ready;
                     localPlayer.isSpectator = serverPlayer.isSpectator;
+                    syncSnakeFields(localPlayer, serverPlayer);
                 } else {
                     players.set(id, {
                         id: id,
@@ -462,6 +482,7 @@ async function connectToRoom(joinFn) {
                         ready: serverPlayer.ready,
                         isSpectator: serverPlayer.isSpectator,
                     });
+                    syncSnakeFields(players.get(id), serverPlayer);
                 }
             });
 
@@ -499,6 +520,12 @@ async function connectToRoom(joinFn) {
                 colorDisplay.style.backgroundColor = color;
                 yourColorDiv2.style.display = 'block';
             }
+        });
+
+        room.onMessage('playEatSound', () => {
+            if (!isSoundEnabled) return;
+            const eatSound = document.getElementById('eatSound');
+            if (eatSound) { eatSound.currentTime = 0; eatSound.play().catch(() => {}); }
         });
 
         room.onMessage('playDieSound', () => {
@@ -598,6 +625,8 @@ function setupAudioButtons() {
 
 // ── Screen / lobby UI updates ───────────────────────────────────────
 
+let _lastHudGameType = null;
+
 function updateScreens() {
     if (!room) return;
 
@@ -608,6 +637,26 @@ function updateScreens() {
     if (gamePhase === 'playing') {
         showScreen('game');
         if (banner) banner.style.display = amSpectator ? 'block' : 'none';
+
+        // Force the players HUD text to refresh when the game type changes
+        // (snake says "Playing", bomberman says "Alive")
+        if (_lastHudGameType !== gameType) {
+            _lastHudGameType = gameType;
+            _uiCache.lastAlive = -1;
+        }
+
+        // Bomberman-specific HUD boxes are hidden while playing snake
+        const snakeMode = gameType === 'snake';
+        const livesBox = document.getElementById('lives-status');
+        if (livesBox) livesBox.style.display = snakeMode ? 'none' : '';
+        if (snakeMode) {
+            const invisBox = document.getElementById('invisibility-status');
+            if (invisBox) invisBox.style.display = 'none';
+            const avatarBox = document.getElementById('your-color');
+            if (avatarBox) avatarBox.style.display = 'none';
+            const bombsBox = document.getElementById('active-bombs-display');
+            if (bombsBox) bombsBox.style.display = 'none';
+        }
     } else {
         showScreen('waiting');
         if (banner) banner.style.display = 'none';
@@ -659,6 +708,16 @@ function updateLobbyUI() {
     });
     listEl.innerHTML = html;
 
+    // Game selector: reflect the server's choice; only the host can change it
+    const gameBombermanBtn = document.getElementById('lobby-game-bomberman');
+    const gameSnakeBtn = document.getElementById('lobby-game-snake');
+    if (gameBombermanBtn && gameSnakeBtn) {
+        gameBombermanBtn.classList.toggle('active', gameType !== 'snake');
+        gameSnakeBtn.classList.toggle('active', gameType === 'snake');
+        gameBombermanBtn.disabled = !isHost;
+        gameSnakeBtn.disabled = !isHost;
+    }
+
     if (readyBtn) {
         readyBtn.style.display = isHost ? 'none' : 'block';
         const amReady = !!(me && me.ready);
@@ -680,6 +739,43 @@ function updateLobbyUI() {
     }
 }
 
+// Sync snake score/segments onto the local player, with head-position
+// interpolation bookkeeping for smooth rendering
+function syncSnakeFields(localPlayer, serverPlayer) {
+    localPlayer.score = serverPlayer.score || 0;
+    localPlayer.segments = serverPlayer.segments
+        ? schemaArrayToPlain(serverPlayer.segments, ['x', 'y'])
+        : [];
+
+    if (localPlayer.segments.length === 0) return;
+
+    const head = localPlayer.segments[0];
+    if (localPlayer.sRenderX === undefined) {
+        localPlayer.sRenderX = head.x;
+        localPlayer.sRenderY = head.y;
+        localPlayer.sStartX = head.x;
+        localPlayer.sStartY = head.y;
+        localPlayer.sTargetX = head.x;
+        localPlayer.sTargetY = head.y;
+        localPlayer.sMoveTime = Date.now();
+    } else if (localPlayer.sTargetX !== head.x || localPlayer.sTargetY !== head.y) {
+        const jump = Math.abs(head.x - localPlayer.sTargetX) + Math.abs(head.y - localPlayer.sTargetY);
+        if (jump > SNAKE_SCL * 2) {
+            // Respawn or screen wrap: snap instead of sliding across the map
+            localPlayer.sRenderX = head.x;
+            localPlayer.sRenderY = head.y;
+            localPlayer.sStartX = head.x;
+            localPlayer.sStartY = head.y;
+        } else {
+            localPlayer.sStartX = localPlayer.sRenderX;
+            localPlayer.sStartY = localPlayer.sRenderY;
+        }
+        localPlayer.sTargetX = head.x;
+        localPlayer.sTargetY = head.y;
+        localPlayer.sMoveTime = Date.now();
+    }
+}
+
 // Helper: convert Colyseus ArraySchema items to plain objects
 function schemaArrayToPlain(schemaArray, fields) {
     const result = [];
@@ -698,6 +794,11 @@ function draw() {
     // Nothing to render while in the lobby (canvas is hidden anyway)
     if (gamePhase !== 'playing') {
         background(26);
+        return;
+    }
+
+    if (gameType === 'snake') {
+        drawSnakeGame();
         return;
     }
 
@@ -731,6 +832,78 @@ function draw() {
     // Draw winner message if applicable
     if (winnerId) {
         drawWinnerMessage();
+    }
+}
+
+// ── Snake rendering ─────────────────────────────────────────────────
+
+function drawSnakeGame() {
+    background(51);
+    const now = Date.now();
+
+    // Draw all snakes with head interpolation
+    players.forEach((player, id) => {
+        if (!player || !player.color || !player.segments || player.segments.length === 0) return;
+
+        fill(player.color);
+        noStroke();
+
+        if (player.sMoveTime !== undefined) {
+            const t = Math.min((now - player.sMoveTime) / SNAKE_TICK, 1.0);
+            player.sRenderX = lerp(player.sStartX ?? player.sTargetX, player.sTargetX, t);
+            player.sRenderY = lerp(player.sStartY ?? player.sTargetY, player.sTargetY, t);
+        }
+
+        player.segments.forEach((segment, i) => {
+            if (i === 0 && player.sRenderX !== undefined) {
+                rect(player.sRenderX, player.sRenderY, SNAKE_SCL, SNAKE_SCL);
+            } else {
+                rect(segment.x, segment.y, SNAKE_SCL, SNAKE_SCL);
+            }
+        });
+    });
+
+    // Draw food
+    fill(255, 0, 100);
+    noStroke();
+    snakeFood.forEach(f => {
+        rect(f.x, f.y, SNAKE_SCL, SNAKE_SCL);
+    });
+
+    drawSnakeScores();
+
+    // Players HUD box (reuses the bomberman cache)
+    if (!_uiCache.initialized) _initUICache();
+    let playing = 0;
+    players.forEach(p => { if (!p.isSpectator) playing++; });
+    if (_uiCache.playersAliveEl && playing !== _uiCache.lastAlive) {
+        _uiCache.lastAlive = playing;
+        _uiCache.playersAliveEl.textContent = `${playing} Playing`;
+    }
+
+    // Draw winner message if applicable
+    if (winnerId) {
+        drawWinnerMessage();
+    }
+}
+
+function drawSnakeScores() {
+    textSize(16);
+    textAlign(LEFT, BASELINE);
+    let y = 20;
+    players.forEach((player, id) => {
+        if (player.isSpectator) return;
+        fill(player.color);
+        const name = player.playerName || 'Anonymous';
+        text(`${name}${id === playerId ? ' (you)' : ''}: ${player.score || 0}`, 10, y);
+        y += 20;
+    });
+
+    const me = players.get(playerId);
+    if (me && !me.isSpectator) {
+        fill(255);
+        textSize(20);
+        text('Score: ' + (me.score || 0), 10, height - 10);
     }
 }
 
@@ -1311,6 +1484,22 @@ function keyPressed() {
 
     if (!players.has(playerId)) return false;
 
+    // Snake: single keypress steers, no key-hold tracking
+    if (gameType === 'snake') {
+        let direction = null;
+        if (keyCode === UP_ARROW || keyCode === 87) {
+            direction = { x: 0, y: -1 };
+        } else if (keyCode === DOWN_ARROW || keyCode === 83) {
+            direction = { x: 0, y: 1 };
+        } else if (keyCode === LEFT_ARROW || keyCode === 65) {
+            direction = { x: -1, y: 0 };
+        } else if (keyCode === RIGHT_ARROW || keyCode === 68) {
+            direction = { x: 1, y: 0 };
+        }
+        if (direction) room.send('direction', direction);
+        return false;
+    }
+
     const localPlayer = players.get(playerId);
     if (!localPlayer.alive) return false;
 
@@ -1365,6 +1554,7 @@ function keyReleased() {
     }
 
     if (!room || gamePhase !== 'playing') return false;
+    if (gameType === 'snake') return false; // Snake has no key-release handling
     if (!players.has(playerId)) return false;
 
     const localPlayer = players.get(playerId);
