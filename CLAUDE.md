@@ -18,13 +18,21 @@ Open **http://localhost:3000/** (override port with the `PORT` env var). Multipl
 
 ## File Map
 
-- `server.js` — Colyseus server; serves static files, exposes `GET /api/rooms` (public room list), defines the single `game` room type
-- `game-room.js` — `GameRoom`: lobby lifecycle + both games' server logic and the unified Colyseus schema (`GameState`, `Player`)
-- `index.html` — the whole client UI: welcome modal (name), room browser, lobby, and in-game HUD
-- `game-sketch.js` — p5.js client: lobby wiring, state sync, and per-game rendering/input
-- `bomberman-assets/` — sprites and sounds for Bomberman rendering
+Server (Node/Colyseus):
 
-## Room Lifecycle (both games)
+- `server.js` — Colyseus server; serves static files, exposes `GET /api/rooms` (public room list), defines the single `game` room type
+- `schema.js` — the unified Colyseus schema shared by all games (`GameState`, `Player`, `Bomb`, `Wall`, …)
+- `game-room.js` — `GameRoom`: lobby lifecycle, join/leave/reconnection, game dispatch; per-game logic is mixed into its prototype from the three `*-room.js` files
+- `bomberman-room.js` / `snake-room.js` / `hangman-room.js` — each game's config, message handlers and game loop (exported as method objects, `this` = the room)
+
+Client (p5.js, global mode — all files share globals):
+
+- `index.html` — the whole client UI: welcome modal (name), room browser, lobby, and in-game HUD; loads the four sketch files
+- `game-sketch.js` — shared core: Colyseus connection, room browser/lobby UI, player state sync, sounds, and p5 lifecycle dispatch (`draw`/`keyPressed`/… route to the active game)
+- `bomberman-sketch.js` / `snake-sketch.js` / `hangman-sketch.js` — each game's asset loading, state sync (`sync*State`), rendering (`draw*Game`) and input handlers
+- `bomberman-assets/` — sprites and sounds for Bomberman rendering (character sprites are also used for lobby avatars)
+
+## Room Lifecycle (all games)
 
 - One Colyseus room type: `game`. Room state has `phase` (`'lobby'` | `'playing'`) and `gameType` (`'bomberman'` | `'snake'` | `'hangman'`).
 - Anyone can create a room from the room browser and becomes its host; rooms are listed via `GET /api/rooms` (metadata: `hostName`, `phase`, `playerCount`, `gameType`) and joinable via `/?room=<roomId>`.
