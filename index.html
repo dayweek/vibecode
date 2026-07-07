@@ -223,6 +223,65 @@
         #lobby-game-select .px-btn:disabled { cursor: default; }
         #lobby-game-select .px-btn.active:disabled { opacity: 1; }
 
+        /* ── Hangman lobby setup ──────────────────────────────────── */
+        #hangman-rounds,
+        #hangman-themes {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+        #hangman-rounds .rounds-btn,
+        #hangman-themes .theme-btn { flex: 1; white-space: nowrap; }
+        #hangman-rounds .rounds-btn.active,
+        #hangman-themes .theme-btn.active {
+            background-color: var(--fuse);
+            color: #241505;
+            border-color: #241505;
+        }
+        #hangman-rounds .rounds-btn.active:disabled,
+        #hangman-themes .theme-btn.active:disabled { opacity: 1; }
+        #hangman-teams {
+            display: flex;
+            gap: 10px;
+        }
+        .team-col {
+            flex: 1;
+            min-width: 0;
+            background-color: var(--panel-deep);
+            border: 3px solid var(--edge);
+            padding: 10px;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+        .team-col.team-red  { box-shadow: inset 0 3px 0 rgba(255, 91, 59, 0.35); }
+        .team-col.team-blue { box-shadow: inset 0 3px 0 rgba(77, 166, 255, 0.35); }
+        .team-title {
+            font-family: 'Press Start 2P', monospace;
+            font-size: 9px;
+            text-transform: uppercase;
+        }
+        .team-red .team-title  { color: var(--flame); }
+        .team-blue .team-title { color: #4da6ff; }
+        .team-list {
+            flex: 1;
+            min-height: 40px;
+            font-size: 17px;
+            line-height: 1.35;
+        }
+        .team-list .team-member {
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .team-list .you { color: var(--fuse); }
+        #random-teams-btn {
+            display: block;
+            width: 100%;
+            box-sizing: border-box;
+            margin-top: 10px;
+        }
+
         /* ── Room browser ─────────────────────────────────────────── */
         #create-room-btn {
             display: block;
@@ -562,6 +621,38 @@
             <div id="lobby-game-select">
                 <button id="lobby-game-bomberman" class="px-btn">💣 Bomberman</button>
                 <button id="lobby-game-snake" class="px-btn">🐍 Snake</button>
+                <button id="lobby-game-hangman" class="px-btn">🔤 Hangman</button>
+            </div>
+            <div id="hangman-setup" style="display: none;">
+                <div class="rule-label">Word theme</div>
+                <div id="hangman-themes">
+                    <button class="theme-btn" data-theme="classic">🎲 Classic</button>
+                    <button class="theme-btn" data-theme="it">💻 IT</button>
+                    <button class="theme-btn" data-theme="vacation">🏖️ Vacation</button>
+                    <button class="theme-btn" data-theme="cinema">🎬 Cinema</button>
+                </div>
+                <div class="rule-label">Rounds</div>
+                <div id="hangman-rounds">
+                    <button class="rounds-btn" data-rounds="1">1</button>
+                    <button class="rounds-btn" data-rounds="2">2</button>
+                    <button class="rounds-btn" data-rounds="3">3</button>
+                    <button class="rounds-btn" data-rounds="5">5</button>
+                    <button class="rounds-btn" data-rounds="10">10</button>
+                </div>
+                <div class="rule-label">Teams</div>
+                <div id="hangman-teams">
+                    <div class="team-col team-red">
+                        <div class="team-title">Team Red</div>
+                        <div id="team-a-list" class="team-list"></div>
+                        <button id="join-team-a">Join Red</button>
+                    </div>
+                    <div class="team-col team-blue">
+                        <div class="team-title">Team Blue</div>
+                        <div id="team-b-list" class="team-list"></div>
+                        <button id="join-team-b">Join Blue</button>
+                    </div>
+                </div>
+                <button id="random-teams-btn">🎲 Random teams</button>
             </div>
             <div class="rule-label">Players</div>
             <div id="lobby-players"></div>

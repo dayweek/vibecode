@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-A real-time multiplayer gaming platform with two games — **Bomberman** and **Snake** — played through a single room system. Built with Node.js, **Colyseus** (`colyseus` + `@colyseus/ws-transport`), Express (static files + room-list API), and p5.js on the client.
+A real-time multiplayer gaming platform with three games — **Bomberman**, **Snake** and **Hangman** — played through a single room system. Built with Node.js, **Colyseus** (`colyseus` + `@colyseus/ws-transport`), Express (static files + room-list API), and p5.js on the client.
 
 There is one entry point: `/` shows a public room browser. Anyone can create a room (becoming its host), and inside the room's lobby the host picks which game to play. There are no per-game URLs.
 
@@ -26,7 +26,7 @@ Open **http://localhost:3000/** (override port with the `PORT` env var). Multipl
 
 ## Room Lifecycle (both games)
 
-- One Colyseus room type: `game`. Room state has `phase` (`'lobby'` | `'playing'`) and `gameType` (`'bomberman'` | `'snake'`).
+- One Colyseus room type: `game`. Room state has `phase` (`'lobby'` | `'playing'`) and `gameType` (`'bomberman'` | `'snake'` | `'hangman'`).
 - Anyone can create a room from the room browser and becomes its host; rooms are listed via `GET /api/rooms` (metadata: `hostName`, `phase`, `playerCount`, `gameType`) and joinable via `/?room=<roomId>`.
 - In the lobby, the **host selects the game** (`setGameType` message; server validates host + lobby phase). Non-hosts see the selection but can't change it.
 - Non-host players toggle Ready (`setReady`); the host can start (`startGame`) only when all others are ready.
@@ -52,6 +52,17 @@ Open **http://localhost:3000/** (override port with the `PORT` env var). Multipl
 - Screen edges wrap; eating food grows the snake and increments score
 - Colliding with any snake (including self) respawns you at score 0
 - First to 20 points wins → everyone returns to the lobby
+
+## Hangman
+
+- Team game: in the lobby every player joins Team Red (`'A'`) or Team Blue (`'B'`) — self-pick or the host's "Random teams" button (`setTeam` / `randomizeTeams`); start is blocked until both teams are non-empty and nobody is unassigned
+- Host configures the number of rounds (`setRounds`, 1–10, default 3) and a word theme (`setTheme`: `classic` | `it` | `vacation` | `cinema`); one random word per round from the theme's built-in list (the word itself never leaves the server — only the masked `hangmanRevealed` string is synced)
+- Answers may be multi-word phrases ("back to the future"); spaces are shown as gaps from the start and can't be guessed
+- Teams alternate turns (the opening team alternates each round); anyone on the active team may guess by clicking/tapping a letter button on the canvas (`guessLetter`)
+- Correct guess: +10 points per revealed occurrence and the team keeps its turn; completing the word is +50 and ends the round
+- Wrong guess: one of 6 gallows parts for that team and the turn passes; a team with 6 misses is out for the round; if both teams hang, the round ends unsolved
+- Highest total score after the last round wins (`winnerId` = `'teamA'` | `'teamB'` | `'draw'`); a team also wins immediately if the whole opposing team leaves
+- Turn-based, so the 60-second inactivity kick is disabled during hangman; team assignments survive returning to the lobby
 
 ## Audio Files
 

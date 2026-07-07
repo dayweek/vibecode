@@ -23,6 +23,20 @@ let hostId = '';
 let snakeFood = [];
 const SNAKE_SCL = 20; // Snake tile size
 const SNAKE_TICK = 100; // Server update interval for head interpolation
+
+// Hangman state (synced from server)
+let hangman = {
+    revealed: '', guessed: '', turn: '', theme: 'classic', round: 0, totalRounds: 3,
+    scoreA: 0, scoreB: 0, wrongA: 0, wrongB: 0,
+};
+const HANGMAN_THEME_LABELS = {
+    classic: 'Classic', it: 'IT', vacation: 'Vacation', cinema: 'Cinema',
+};
+let hangmanNotice = null; // { text, color, until } — transient guess feedback
+const TEAM_INFO = {
+    A: { name: 'Team Red', color: '#ff5b3b' },
+    B: { name: 'Team Blue', color: '#4da6ff' },
+};
 let amSpectator = false;
 let roomPollInterval = null;
 let lobbyButtonsInitialized = false;
@@ -256,7 +270,8 @@ function renderRoomList(rooms) {
 
         const body = document.createElement('div');
         body.className = 'room-body';
-        const gameLabel = meta.gameType === 'snake' ? '🐍 Snake' : '💣 Bomberman';
+        const gameLabel = meta.gameType === 'snake' ? '🐍 Snake'
+            : meta.gameType === 'hangman' ? '🔤 Hangman' : '💣 Bomberman';
         body.innerHTML =
             `<div class="room-name">${escapeHtml(meta.hostName || 'Unknown')}'s room</div>` +
             `<div class="room-meta">${gameLabel} &middot; ${r.clients}/${r.maxClients} players &middot; ` +
@@ -290,6 +305,34 @@ function setupLobbyButtons() {
     const gameSnakeBtn = document.getElementById('lobby-game-snake');
     if (gameSnakeBtn) gameSnakeBtn.addEventListener('click', () => {
         if (room) room.send('setGameType', 'snake');
+    });
+    const gameHangmanBtn = document.getElementById('lobby-game-hangman');
+    if (gameHangmanBtn) gameHangmanBtn.addEventListener('click', () => {
+        if (room) room.send('setGameType', 'hangman');
+    });
+
+    // Hangman lobby setup: theme + rounds (host), team picks, random split (host)
+    document.querySelectorAll('#hangman-themes .theme-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+            if (room) room.send('setTheme', btn.dataset.theme);
+        });
+    });
+    document.querySelectorAll('#hangman-rounds .rounds-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+            if (room) room.send('setRounds', parseInt(btn.dataset.rounds, 10));
+        });
+    });
+    const joinTeamA = document.getElementById('join-team-a');
+    if (joinTeamA) joinTeamA.addEventListener('click', () => {
+        if (room) room.send('setTeam', 'A');
+    });
+    const joinTeamB = document.getElementById('join-team-b');
+    if (joinTeamB) joinTeamB.addEventListener('click', () => {
+        if (room) room.send('setTeam', 'B');
+    });
+    const randomTeamsBtn = document.getElementById('random-teams-btn');
+    if (randomTeamsBtn) randomTeamsBtn.addEventListener('click', () => {
+        if (room) room.send('randomizeTeams');
     });
 
     const readyBtn = document.getElementById('ready-btn');
@@ -410,6 +453,18 @@ async function connectToRoom(joinFn) {
             lavaTiles = schemaArrayToPlain(state.lavaTiles, ['x', 'y']);
             snakeFood = state.food ? schemaArrayToPlain(state.food, ['x', 'y']) : [];
 
+            // Hangman state
+            hangman.revealed = state.hangmanRevealed || '';
+            hangman.guessed = state.hangmanGuessed || '';
+            hangman.turn = state.hangmanTurn || '';
+            hangman.theme = state.hangmanTheme || 'classic';
+            hangman.round = state.hangmanRound || 0;
+            hangman.totalRounds = state.hangmanTotalRounds || 3;
+            hangman.scoreA = state.hangmanScoreA || 0;
+            hangman.scoreB = state.hangmanScoreB || 0;
+            hangman.wrongA = state.hangmanWrongA || 0;
+            hangman.wrongB = state.hangmanWrongB || 0;
+
             // Sync players from MapSchema
             const currentIds = new Set();
             state.players.forEach((serverPlayer, id) => {
@@ -454,6 +509,7 @@ async function connectToRoom(joinFn) {
                     localPlayer.protectedUntil = serverPlayer.protectedUntil;
                     localPlayer.ready = serverPlayer.ready;
                     localPlayer.isSpectator = serverPlayer.isSpectator;
+                    localPlayer.team = serverPlayer.team || '';
                     syncSnakeFields(localPlayer, serverPlayer);
                 } else {
                     players.set(id, {
@@ -481,6 +537,7 @@ async function connectToRoom(joinFn) {
                         protectedUntil: serverPlayer.protectedUntil,
                         ready: serverPlayer.ready,
                         isSpectator: serverPlayer.isSpectator,
+                        team: serverPlayer.team || '',
                     });
                     syncSnakeFields(players.get(id), serverPlayer);
                 }
@@ -556,6 +613,26 @@ async function connectToRoom(joinFn) {
             if (!isSoundEnabled) return;
             const newSound = document.getElementById('newSound');
             if (newSound) { newSound.currentTime = 0; newSound.play().catch(() => {}); }
+        });
+
+        // ── Hangman feedback messages ───────────────────────────────
+
+        room.onMessage('hangmanGuess', (data) => {
+            if (!data) return;
+            hangmanNotice = {
+                text: `${data.playerName || 'Someone'} guessed "${(data.letter || '').toUpperCase()}" — ${data.correct ? 'correct!' : 'nope!'}`,
+                color: data.correct ? '#7ee04e' : '#ff5b3b',
+                until: Date.now() + 2500,
+            };
+        });
+
+        room.onMessage('hangmanRoundEnd', (data) => {
+            if (!data) return;
+            const word = (data.word || '').toUpperCase();
+            const info = TEAM_INFO[data.team];
+            hangmanNotice = info
+                ? { text: `${info.name} solved it — ${word}!`, color: info.color, until: Date.now() + 4000 }
+                : { text: `Nobody solved it — the word was ${word}`, color: '#9d8fae', until: Date.now() + 4000 };
         });
 
         // Handle room errors and disconnection
@@ -645,11 +722,14 @@ function updateScreens() {
             _uiCache.lastAlive = -1;
         }
 
-        // Bomberman-specific HUD boxes are hidden while playing snake
-        const snakeMode = gameType === 'snake';
+        // Bomberman-specific HUD boxes are hidden for the other games
+        const minimalHud = gameType !== 'bomberman';
         const livesBox = document.getElementById('lives-status');
-        if (livesBox) livesBox.style.display = snakeMode ? 'none' : '';
-        if (snakeMode) {
+        if (livesBox) livesBox.style.display = minimalHud ? 'none' : '';
+        // The alive/playing counter means nothing in hangman
+        const statsBox = document.getElementById('game-stats');
+        if (statsBox) statsBox.style.display = gameType === 'hangman' ? 'none' : '';
+        if (minimalHud) {
             const invisBox = document.getElementById('invisibility-status');
             if (invisBox) invisBox.style.display = 'none';
             const avatarBox = document.getElementById('your-color');
@@ -711,11 +791,52 @@ function updateLobbyUI() {
     // Game selector: reflect the server's choice; only the host can change it
     const gameBombermanBtn = document.getElementById('lobby-game-bomberman');
     const gameSnakeBtn = document.getElementById('lobby-game-snake');
-    if (gameBombermanBtn && gameSnakeBtn) {
-        gameBombermanBtn.classList.toggle('active', gameType !== 'snake');
+    const gameHangmanBtn = document.getElementById('lobby-game-hangman');
+    if (gameBombermanBtn && gameSnakeBtn && gameHangmanBtn) {
+        gameBombermanBtn.classList.toggle('active', gameType === 'bomberman');
         gameSnakeBtn.classList.toggle('active', gameType === 'snake');
+        gameHangmanBtn.classList.toggle('active', gameType === 'hangman');
         gameBombermanBtn.disabled = !isHost;
         gameSnakeBtn.disabled = !isHost;
+        gameHangmanBtn.disabled = !isHost;
+    }
+
+    // Hangman setup: rounds + team split (only visible when hangman is picked)
+    const hangmanSetup = document.getElementById('hangman-setup');
+    if (hangmanSetup) hangmanSetup.style.display = gameType === 'hangman' ? 'block' : 'none';
+    let teamsValid = true;
+    if (gameType === 'hangman') {
+        document.querySelectorAll('#hangman-themes .theme-btn').forEach(btn => {
+            btn.classList.toggle('active', btn.dataset.theme === hangman.theme);
+            btn.disabled = !isHost;
+        });
+        document.querySelectorAll('#hangman-rounds .rounds-btn').forEach(btn => {
+            btn.classList.toggle('active', parseInt(btn.dataset.rounds, 10) === hangman.totalRounds);
+            btn.disabled = !isHost;
+        });
+
+        let countA = 0, countB = 0, unassigned = 0;
+        const listA = [], listB = [];
+        players.forEach((p, id) => {
+            const memberHtml =
+                `<div class="team-member">${escapeHtml(p.playerName || 'Anonymous')}` +
+                `${id === playerId ? ' <span class="you">(you)</span>' : ''}</div>`;
+            if (p.team === 'A') { countA++; listA.push(memberHtml); }
+            else if (p.team === 'B') { countB++; listB.push(memberHtml); }
+            else unassigned++;
+        });
+        const teamAEl = document.getElementById('team-a-list');
+        if (teamAEl) teamAEl.innerHTML = listA.join('') || '<div class="muted">Empty</div>';
+        const teamBEl = document.getElementById('team-b-list');
+        if (teamBEl) teamBEl.innerHTML = listB.join('') || '<div class="muted">Empty</div>';
+        teamsValid = countA > 0 && countB > 0 && unassigned === 0;
+
+        const joinTeamA = document.getElementById('join-team-a');
+        if (joinTeamA) joinTeamA.disabled = !!(me && me.team === 'A');
+        const joinTeamB = document.getElementById('join-team-b');
+        if (joinTeamB) joinTeamB.disabled = !!(me && me.team === 'B');
+        const randomBtn = document.getElementById('random-teams-btn');
+        if (randomBtn) randomBtn.style.display = isHost ? 'block' : 'none';
     }
 
     if (readyBtn) {
@@ -726,13 +847,19 @@ function updateLobbyUI() {
     }
     if (startBtn) {
         startBtn.style.display = isHost ? 'block' : 'none';
-        startBtn.disabled = !othersReady;
+        startBtn.disabled = !othersReady || !teamsValid;
     }
     if (statusEl) {
         if (isHost) {
-            statusEl.textContent = othersReady
-                ? (players.size > 1 ? "Everyone's ready. Light the fuse!" : 'You can start solo, or wait for friends.')
-                : 'Waiting for everyone to ready up...';
+            if (!othersReady) {
+                statusEl.textContent = 'Waiting for everyone to ready up...';
+            } else if (!teamsValid) {
+                statusEl.textContent = 'Split everyone into two teams to start.';
+            } else {
+                statusEl.textContent = players.size > 1
+                    ? "Everyone's ready. Light the fuse!"
+                    : 'You can start solo, or wait for friends.';
+            }
         } else {
             statusEl.textContent = 'Waiting for the host to start...';
         }
@@ -799,6 +926,11 @@ function draw() {
 
     if (gameType === 'snake') {
         drawSnakeGame();
+        return;
+    }
+
+    if (gameType === 'hangman') {
+        drawHangmanGame();
         return;
     }
 
@@ -884,6 +1016,252 @@ function drawSnakeGame() {
     // Draw winner message if applicable
     if (winnerId) {
         drawWinnerMessage();
+    }
+}
+
+// ── Hangman rendering ───────────────────────────────────────────────
+
+function submitHangmanGuess(letter) {
+    if (!room || gameType !== 'hangman' || gamePhase !== 'playing' || winnerId) return;
+    const me = players.get(playerId);
+    if (!me || me.isSpectator || !me.team) return;
+    if (hangman.turn !== me.team) return;
+    if (!/^[a-z]$/.test(letter)) return;
+    if (hangman.guessed.includes(letter)) return;
+    room.send('guessLetter', letter);
+}
+
+function drawHangmanGame() {
+    background(33, 26, 48);
+    const now = Date.now();
+    const me = players.get(playerId);
+
+    // Header: round + turn banner
+    noStroke();
+    textAlign(CENTER, CENTER);
+    fill(242, 233, 220);
+    textSize(20);
+    const themeLabel = HANGMAN_THEME_LABELS[hangman.theme] || 'Classic';
+    text(`Round ${hangman.round} / ${hangman.totalRounds} — ${themeLabel}`, width / 2, 26);
+
+    const turnInfo = TEAM_INFO[hangman.turn];
+    if (turnInfo && !winnerId) {
+        const myTurn = me && !me.isSpectator && me.team === hangman.turn;
+        fill(turnInfo.color);
+        textSize(24);
+        text(`${turnInfo.name}'s turn${myTurn ? ' — pick a letter!' : ''}`, width / 2, 60);
+    }
+
+    // Team panels with gallows figures
+    drawHangmanTeam('A', 40);
+    drawHangmanTeam('B', width - 320);
+
+    // Center column: scoreboard vs., notice, word, alphabet
+    fill(157, 143, 174);
+    textSize(26);
+    text(`${hangman.scoreA}  :  ${hangman.scoreB}`, width / 2, 120);
+
+    if (hangmanNotice && now < hangmanNotice.until) {
+        fill(hangmanNotice.color);
+        textSize(19);
+        text(hangmanNotice.text, width / 2, 425);
+    }
+
+    drawHangmanWord();
+    drawHangmanAlphabet();
+
+    if (winnerId) drawWinnerMessage();
+}
+
+function drawHangmanTeam(team, x) {
+    const info = TEAM_INFO[team];
+    const wrong = team === 'A' ? hangman.wrongA : hangman.wrongB;
+    const score = team === 'A' ? hangman.scoreA : hangman.scoreB;
+    const isTurn = hangman.turn === team && !winnerId;
+
+    // Active-turn highlight frame
+    if (isTurn) {
+        noFill();
+        stroke(info.color);
+        strokeWeight(3);
+        rect(x - 12, 82, 304, 320);
+    }
+    noStroke();
+
+    fill(info.color);
+    textAlign(LEFT, CENTER);
+    textSize(19);
+    text(`${info.name} — ${score} pts`, x, 100);
+
+    drawGallowsFigure(x + 60, 118, wrong, info.color);
+
+    textAlign(LEFT, CENTER);
+    if (wrong >= 6) {
+        fill(255, 91, 59);
+        textSize(17);
+        text('HANGED — out this round', x, 315);
+    } else {
+        fill(157, 143, 174);
+        textSize(16);
+        text(`${wrong} / 6 misses`, x, 315);
+    }
+
+    // Team members (capped so long rosters don't spill into the word area)
+    const names = [];
+    players.forEach((p, id) => {
+        if (p.team === team && !p.isSpectator) {
+            names.push({ id, label: (p.playerName || 'Anonymous') + (id === playerId ? ' (you)' : '') });
+        }
+    });
+    textSize(16);
+    let yy = 340;
+    const maxShown = 4;
+    names.slice(0, maxShown).forEach(n => {
+        fill(n.id === playerId ? color(255, 180, 55) : color(242, 233, 220));
+        text(n.label, x, yy);
+        yy += 19;
+    });
+    if (names.length > maxShown) {
+        fill(157, 143, 174);
+        text(`+${names.length - maxShown} more`, x, yy);
+    }
+    textAlign(CENTER, CENTER);
+}
+
+// Classic 6-part figure: head, body, both arms, both legs
+function drawGallowsFigure(x, y, wrong, col) {
+    stroke(157, 143, 174);
+    strokeWeight(4);
+    line(x, y + 175, x + 130, y + 175);   // base
+    line(x + 25, y + 175, x + 25, y);     // pole
+    line(x + 25, y, x + 105, y);          // beam
+    line(x + 105, y, x + 105, y + 22);    // rope
+
+    stroke(col);
+    strokeWeight(3);
+    noFill();
+    if (wrong >= 1) ellipse(x + 105, y + 38, 32, 32);            // head
+    if (wrong >= 2) line(x + 105, y + 54, x + 105, y + 110);     // body
+    if (wrong >= 3) line(x + 105, y + 66, x + 80, y + 92);       // left arm
+    if (wrong >= 4) line(x + 105, y + 66, x + 130, y + 92);      // right arm
+    if (wrong >= 5) line(x + 105, y + 110, x + 85, y + 145);     // left leg
+    if (wrong >= 6) line(x + 105, y + 110, x + 125, y + 145);    // right leg
+    noStroke();
+}
+
+function drawHangmanWord() {
+    const word = hangman.revealed || '';
+    if (!word) return;
+    const n = word.length;
+    const bw = Math.min(50, (width - 120) / n);
+    const x0 = (width - bw * n) / 2;
+    const baseY = 485;
+
+    textAlign(CENTER, CENTER);
+    textSize(Math.min(34, bw * 0.72));
+    for (let i = 0; i < n; i++) {
+        // Spaces in multi-word answers are plain gaps — no blank to fill
+        if (word[i] === ' ') continue;
+        stroke(242, 233, 220);
+        strokeWeight(3);
+        line(x0 + i * bw + 6, baseY, x0 + (i + 1) * bw - 6, baseY);
+        noStroke();
+        if (word[i] !== '_') {
+            fill(255, 180, 55);
+            text(word[i].toUpperCase(), x0 + i * bw + bw / 2, baseY - 22);
+        }
+    }
+}
+
+const HANGMAN_LETTERS = 'abcdefghijklmnopqrstuvwxyz';
+
+// Letter button grid: 13 per row, centered on the 960px canvas
+function hangmanLetterTile(i) {
+    return {
+        x: 119 + (i % 13) * 56,
+        y: 524 + Math.floor(i / 13) * 42,
+        w: 50,
+        h: 34,
+    };
+}
+
+// Mouse position in canvas coordinates. p5 0.5.7 doesn't compensate for the
+// canvas being scaled down by CSS (max-height: 80vh), so do it ourselves.
+function hangmanCanvasMouse() {
+    const cnv = document.querySelector('#canvas-container canvas');
+    if (cnv) {
+        const rect = cnv.getBoundingClientRect();
+        if (rect.width > 0 && rect.height > 0) {
+            return { x: mouseX * (width / rect.width), y: mouseY * (height / rect.height) };
+        }
+    }
+    return { x: mouseX, y: mouseY };
+}
+
+// Whether the local player may guess right now
+function hangmanCanGuess() {
+    const me = players.get(playerId);
+    return !!(me && !me.isSpectator && me.team && me.team === hangman.turn)
+        && !winnerId
+        && hangman.revealed.includes('_'); // false during the round-end reveal
+}
+
+function drawHangmanAlphabet() {
+    const canGuess = hangmanCanGuess();
+    const m = hangmanCanvasMouse();
+    let hovering = false;
+
+    textAlign(CENTER, CENTER);
+    textSize(18);
+    for (let i = 0; i < 26; i++) {
+        const t = hangmanLetterTile(i);
+        const ch = HANGMAN_LETTERS[i];
+        const guessed = hangman.guessed.includes(ch);
+        const correct = guessed && hangman.revealed.includes(ch);
+        const hover = canGuess && !guessed
+            && m.x >= t.x && m.x <= t.x + t.w && m.y >= t.y && m.y <= t.y + t.h;
+        if (hover) hovering = true;
+
+        // Button face
+        stroke(13, 7, 20);
+        strokeWeight(2);
+        if (correct) fill(26, 58, 20);
+        else if (guessed) fill(58, 22, 22);
+        else if (hover) fill(255, 180, 55);
+        else if (canGuess) fill(59, 45, 73);
+        else fill(42, 32, 54);
+        rect(t.x, t.y, t.w, t.h);
+        noStroke();
+
+        // Letter
+        if (correct) fill(126, 224, 78);
+        else if (guessed) fill(255, 91, 59);
+        else if (hover) fill(36, 21, 5);
+        else if (canGuess) fill(242, 233, 220);
+        else fill(157, 143, 174);
+        text(ch.toUpperCase(), t.x + t.w / 2, t.y + t.h / 2);
+
+        if (guessed && !correct) {
+            stroke(255, 91, 59);
+            strokeWeight(2);
+            line(t.x + t.w / 2 - 9, t.y + t.h / 2, t.x + t.w / 2 + 9, t.y + t.h / 2);
+            noStroke();
+        }
+    }
+    cursor(hovering ? HAND : ARROW);
+}
+
+// Clicking (or tapping) a letter button submits a guess
+function mousePressed() {
+    if (gameType !== 'hangman' || gamePhase !== 'playing' || winnerId) return;
+    if (!hangmanCanGuess()) return;
+    const m = hangmanCanvasMouse();
+    for (let i = 0; i < 26; i++) {
+        const t = hangmanLetterTile(i);
+        if (m.x >= t.x && m.x <= t.x + t.w && m.y >= t.y && m.y <= t.y + t.h) {
+            submitHangmanGuess(HANGMAN_LETTERS[i]);
+            return;
+        }
     }
 }
 
@@ -1445,11 +1823,21 @@ function updateActiveBombsDisplay() {
 }
 
 function drawWinnerMessage() {
-    const winner = players.get(winnerId);
-    const winnerName = winnerId === playerId
-        ? "You"
-        : (winner && winner.playerName ? winner.playerName : `Player ${winnerId.substring(0, 6)}...`);
-    const message = winner ? `${winnerName} wins!` : "Game Over!";
+    let message;
+    if (winnerId === 'teamA' || winnerId === 'teamB') {
+        const team = winnerId === 'teamA' ? 'A' : 'B';
+        const me = players.get(playerId);
+        message = `${TEAM_INFO[team].name} wins!` +
+            (me && me.team === team && !me.isSpectator ? ' 🎉' : '');
+    } else if (winnerId === 'draw') {
+        message = "It's a draw!";
+    } else {
+        const winner = players.get(winnerId);
+        const winnerName = winnerId === playerId
+            ? "You"
+            : (winner && winner.playerName ? winner.playerName : `Player ${winnerId.substring(0, 6)}...`);
+        message = winner ? `${winnerName} wins!` : "Game Over!";
+    }
 
     fill(0, 0, 0, 150);
     rect(0, height / 2 - 50, width, 100);
@@ -1473,14 +1861,18 @@ function keyPressed() {
         return true; // Allow typing in input fields
     }
 
+    // In the menus (room browser / lobby) the page should behave normally —
+    // only grab keys while a game is actually being played
+    if (!room || gamePhase !== 'playing') return true;
+
     // Prevent default for arrow keys and WASD to disable scrolling
     // Using keyCodes for WASD: W=87, A=65, S=83, D=68 (physical position, ignores layout)
     if ([UP_ARROW, DOWN_ARROW, LEFT_ARROW, RIGHT_ARROW, 32, 87, 65, 83, 68].includes(keyCode)) {
         event.preventDefault();
     }
 
-    // Game controls only apply during an active game
-    if (!room || gamePhase !== 'playing' || winnerId) return false;
+    // Game controls are paused on the winner screen
+    if (winnerId) return false;
 
     if (!players.has(playerId)) return false;
 
@@ -1499,6 +1891,9 @@ function keyPressed() {
         if (direction) room.send('direction', direction);
         return false;
     }
+
+    // Hangman: guessing is done by clicking the letter buttons, not typing
+    if (gameType === 'hangman') return false;
 
     const localPlayer = players.get(playerId);
     if (!localPlayer.alive) return false;
@@ -1548,13 +1943,15 @@ function keyReleased() {
         return true; // Allow typing in input fields
     }
 
+    // Keys are only grabbed during an active game, never in the menus
+    if (!room || gamePhase !== 'playing') return true;
+
     // Prevent default for arrow keys and WASD
     if ([UP_ARROW, DOWN_ARROW, LEFT_ARROW, RIGHT_ARROW, 32, 87, 65, 83, 68].includes(keyCode)) {
         event.preventDefault();
     }
-
-    if (!room || gamePhase !== 'playing') return false;
     if (gameType === 'snake') return false; // Snake has no key-release handling
+    if (gameType === 'hangman') return false; // Hangman guesses on key press only
     if (!players.has(playerId)) return false;
 
     const localPlayer = players.get(playerId);
