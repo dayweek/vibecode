@@ -224,19 +224,22 @@
         #lobby-game-select .px-btn:disabled { cursor: default; }
         #lobby-game-select .px-btn.active:disabled { opacity: 1; }
 
-        /* ── Hangman / Vibe Check lobby setup ─────────────────────── */
+        /* ── Hangman / Vibe Check / Draw It lobby setup ───────────── */
         #hangman-rounds,
         #hangman-themes,
-        #vibe-rounds {
+        #vibe-rounds,
+        #draw-rounds {
             display: flex;
             gap: 8px;
             flex-wrap: wrap;
         }
         #hangman-rounds .rounds-btn,
         #vibe-rounds .rounds-btn,
+        #draw-rounds .rounds-btn,
         #hangman-themes .theme-btn { flex: 1; white-space: nowrap; }
         #hangman-rounds .rounds-btn.active,
         #vibe-rounds .rounds-btn.active,
+        #draw-rounds .rounds-btn.active,
         #hangman-themes .theme-btn.active {
             background-color: var(--fuse);
             color: #241505;
@@ -244,21 +247,25 @@
         }
         #hangman-rounds .rounds-btn.active:disabled,
         #vibe-rounds .rounds-btn.active:disabled,
+        #draw-rounds .rounds-btn.active:disabled,
         #hangman-themes .theme-btn.active:disabled { opacity: 1; }
-        #vibecheck-setup .vibe-hint {
+        #vibecheck-setup .vibe-hint,
+        #drawit-setup .vibe-hint {
             margin: 10px 0 0;
             color: var(--muted);
             font-size: 17px;
             line-height: 1.3;
         }
 
-        /* ── Vibe Check clue input (psychic only, shown in-game) ──── */
-        #vibe-clue-bar {
+        /* ── Vibe Check clue / Draw It guess inputs (shown in-game) ─ */
+        #vibe-clue-bar,
+        #draw-guess-bar {
             display: none;
             gap: 8px;
             max-width: 960px;
         }
-        #vibe-clue-bar input {
+        #vibe-clue-bar input,
+        #draw-guess-bar input {
             flex: 1;
             min-width: 0;
             padding: 10px 12px;
@@ -653,6 +660,19 @@
                 <button id="lobby-game-snake" class="px-btn">🐍 Snake</button>
                 <button id="lobby-game-hangman" class="px-btn">🔤 Hangman</button>
                 <button id="lobby-game-vibecheck" class="px-btn">📡 Vibe Check</button>
+                <button id="lobby-game-drawit" class="px-btn">✏️ Draw It</button>
+            </div>
+            <div id="drawit-setup" style="display: none;">
+                <div class="rule-label">Rounds</div>
+                <div id="draw-rounds">
+                    <button class="rounds-btn" data-rounds="4">4</button>
+                    <button class="rounds-btn" data-rounds="6">6</button>
+                    <button class="rounds-btn" data-rounds="8">8</button>
+                    <button class="rounds-btn" data-rounds="10">10</button>
+                </div>
+                <p class="vibe-hint">Each round one player gets a secret word and draws it —
+                no letters or numbers! Everyone else types guesses; the faster you get it,
+                the more points you score, and the drawer scores for every correct guess.</p>
             </div>
             <div id="vibecheck-setup" style="display: none;">
                 <div class="rule-label">Rounds</div>
@@ -719,6 +739,10 @@
                 <input type="text" id="vibe-clue-input" maxlength="60" placeholder="Type a clue that sits exactly at the gold marker..." autocomplete="off">
                 <button id="vibe-clue-send" class="px-btn gold">Give clue</button>
             </div>
+            <div id="draw-guess-bar">
+                <input type="text" id="draw-guess-input" maxlength="40" placeholder="What is being drawn? Type your guess..." autocomplete="off">
+                <button id="draw-guess-send" class="px-btn gold">Guess</button>
+            </div>
             <div id="active-bombs-display" class="hud-box" style="display: none; max-width: 960px;">
                 <div id="active-bombs-list" style="font-size: 15px;"></div>
             </div>
@@ -766,5 +790,6 @@
     <script src="snake-sketch.js"></script>
     <script src="hangman-sketch.js"></script>
     <script src="vibecheck-sketch.js"></script>
+    <script src="drawit-sketch.js"></script>
 </body>
 </html>

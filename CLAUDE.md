@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-A real-time multiplayer gaming platform with four games — **Bomberman**, **Snake**, **Hangman** and **Vibe Check** — played through a single room system. Built with Node.js, **Colyseus** (`colyseus` + `@colyseus/ws-transport`), Express (static files + room-list API), and p5.js on the client.
+A real-time multiplayer gaming platform with five games — **Bomberman**, **Snake**, **Hangman**, **Vibe Check** and **Draw It** — played through a single room system. Built with Node.js, **Colyseus** (`colyseus` + `@colyseus/ws-transport`), Express (static files + room-list API), and p5.js on the client.
 
 There is one entry point: `/` shows a public room browser. Anyone can create a room (becoming its host), and inside the room's lobby the host picks which game to play. There are no per-game URLs.
 
@@ -22,19 +22,19 @@ Server (Node/Colyseus):
 
 - `server.js` — Colyseus server; serves static files, exposes `GET /api/rooms` (public room list), defines the single `game` room type
 - `schema.js` — the unified Colyseus schema shared by all games (`GameState`, `Player`, `Bomb`, `Wall`, …)
-- `game-room.js` — `GameRoom`: lobby lifecycle, join/leave/reconnection, game dispatch; per-game logic is mixed into its prototype from the four `*-room.js` files
-- `bomberman-room.js` / `snake-room.js` / `hangman-room.js` / `vibecheck-room.js` — each game's config, message handlers and game loop (exported as method objects, `this` = the room)
+- `game-room.js` — `GameRoom`: lobby lifecycle, join/leave/reconnection, game dispatch; per-game logic is mixed into its prototype from the five `*-room.js` files
+- `bomberman-room.js` / `snake-room.js` / `hangman-room.js` / `vibecheck-room.js` / `drawit-room.js` — each game's config, message handlers and game loop (exported as method objects, `this` = the room)
 
 Client (p5.js, global mode — all files share globals):
 
-- `index.html` — the whole client UI: welcome modal (name), room browser, lobby, and in-game HUD; loads the five sketch files
+- `index.html` — the whole client UI: welcome modal (name), room browser, lobby, and in-game HUD; loads the six sketch files
 - `game-sketch.js` — shared core: Colyseus connection, room browser/lobby UI, player state sync, sounds, and p5 lifecycle dispatch (`draw`/`keyPressed`/`mousePressed`/… route to the active game)
-- `bomberman-sketch.js` / `snake-sketch.js` / `hangman-sketch.js` / `vibecheck-sketch.js` — each game's asset loading, state sync (`sync*State`), rendering (`draw*Game`) and input handlers
+- `bomberman-sketch.js` / `snake-sketch.js` / `hangman-sketch.js` / `vibecheck-sketch.js` / `drawit-sketch.js` — each game's asset loading, state sync (`sync*State`), rendering (`draw*Game`) and input handlers
 - `bomberman-assets/` — sprites and sounds for Bomberman rendering (character sprites are also used for lobby avatars)
 
 ## Room Lifecycle (all games)
 
-- One Colyseus room type: `game`. Room state has `phase` (`'lobby'` | `'playing'`) and `gameType` (`'bomberman'` | `'snake'` | `'hangman'` | `'vibecheck'`).
+- One Colyseus room type: `game`. Room state has `phase` (`'lobby'` | `'playing'`) and `gameType` (`'bomberman'` | `'snake'` | `'hangman'` | `'vibecheck'` | `'drawit'`).
 - Anyone can create a room from the room browser and becomes its host; rooms are listed via `GET /api/rooms` (metadata: `hostName`, `phase`, `playerCount`, `gameType`) and joinable via `/?room=<roomId>`.
 - In the lobby, the **host selects the game** (`setGameType` message; server validates host + lobby phase). Non-hosts see the selection but can't change it.
 - Non-host players toggle Ready (`setReady`); the host can start (`startGame`) only when all others are ready.
@@ -82,6 +82,16 @@ Client (p5.js, global mode — all files share globals):
 - Highest total after the last round wins (`winnerId` = sessionId or `'draw'`). With exactly 2 players the psychic and lone guesser always gain equal points, so 2-player games end in a draw
 - Turn-based like hangman: the inactivity kick is disabled; the phase deadlines prevent stalls instead
 - Client caveat: p5's global `mousePressed`/`mouseDragged` must not `preventDefault` events aimed at HTML UI (see the `event.target.tagName !== 'CANVAS'` guard in `game-sketch.js`), or clicks can't focus the clue input
+
+## Draw It
+
+- Pictionary-style drawing game; needs at least 2 players. Host configures rounds (`setDrawRounds`, 1–10, default 6)
+- Each round one player is the **drawer** (role rotates through a shuffled order): the server privately sends them a word (`drawWord` message — the word never enters synced state during the round); everyone else sees only the mask (`drawMasked`), with a hint letter revealed at 40% and 70% of the round (always keeping at least one letter hidden)
+- The drawer paints on a shared 580x440 board with mouse/touch: canvas palette with 9 colors (white doubles as eraser), 3 brush sizes and a clear button. Strokes are **not** in the Colyseus schema — the drawer sends batched polyline chunks (`drawStroke` `{c, s, p:[x0,y0,…]}` in board-space coords), the server validates, buffers them (for late joiners, sent as `drawInit` on join) and relays to everyone else; `drawClear` wipes the board. Clients paint chunks into a p5 `createGraphics` buffer
+- Guessers type into an HTML input under the canvas (`drawGuess`); wrong guesses are broadcast to the feed (`drawFeed`), near-misses (edit distance 1) get a private "so close" nudge
+- Scoring: correct guesses score by order — 5/4/3/2, then 1 — and the drawer gets +2 per correct guesser; totals reuse `Player.score`
+- The round reveals when all guessers got it or the 75s deadline passes (`drawReveal` message + the word synced into `drawWord`/`drawMasked`); a drawer leaving hands the same round to the next drawer
+- Highest total after the last round wins (`winnerId` = sessionId or `'draw'`); turn-based like hangman, so the inactivity kick is disabled
 
 ## Audio Files
 

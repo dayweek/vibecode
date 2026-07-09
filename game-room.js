@@ -5,6 +5,7 @@ const { BOMBERMAN_CONFIG, bombermanMethods } = require('./bomberman-room');
 const { snakeMethods } = require('./snake-room');
 const { HANGMAN_CONFIG, hangmanMethods } = require('./hangman-room');
 const { VIBECHECK_CONFIG, vibecheckMethods } = require('./vibecheck-room');
+const { DRAWIT_CONFIG, drawitMethods } = require('./drawit-room');
 
 // ── Room-level constants ─────────────────────────────────────────────
 
@@ -64,6 +65,13 @@ class GameRoom extends Room {
         this.state.vibeTotalRounds = VIBECHECK_CONFIG.defaultRounds;
         this.state.vibeTarget = -1;
         this.state.vibeDeadline = 0;
+        this.state.drawPhase = '';
+        this.state.drawDrawerId = '';
+        this.state.drawMasked = '';
+        this.state.drawWord = '';
+        this.state.drawRound = 0;
+        this.state.drawTotalRounds = DRAWIT_CONFIG.defaultRounds;
+        this.state.drawDeadline = 0;
 
         this.maxClients = ROOM_CONFIG.maxPlayers;
 
@@ -88,6 +96,18 @@ class GameRoom extends Room {
         this.vibePsychicOrder = [];
         this.vibePsychicIdx = -1;
         this.vibeRoundTimeout = null;
+
+        // Draw It internals (the word itself is never synced during a round;
+        // strokes are relayed by message and buffered here for late joiners)
+        this.drawWord = '';
+        this.drawWordPool = [];
+        this.drawOrder = [];
+        this.drawIdx = -1;
+        this.drawStrokes = [];
+        this.drawCorrectCount = 0;
+        this.drawTurnPts = new Map();
+        this.drawHintTimes = [];
+        this.drawRoundTimeout = null;
 
         // Per-player internal state (direction, activity time, hidden wall data)
         this.playerInternal = new Map();
@@ -115,6 +135,7 @@ class GameRoom extends Room {
         this.registerSnakeMessages();
         this.registerHangmanMessages();
         this.registerVibecheckMessages();
+        this.registerDrawitMessages();
 
         this.onMessage('update_player_name', (client, newName) => {
             const player = this.state.players.get(client.sessionId);
@@ -128,7 +149,7 @@ class GameRoom extends Room {
         this.onMessage('setGameType', (client, gameType) => {
             if (this.state.phase !== 'lobby') return;
             if (client.sessionId !== this.state.hostId) return;
-            if (!['bomberman', 'snake', 'hangman', 'vibecheck'].includes(gameType)) return;
+            if (!['bomberman', 'snake', 'hangman', 'vibecheck', 'drawit'].includes(gameType)) return;
             this.state.gameType = gameType;
             this.updateMetadata();
         });
@@ -152,6 +173,8 @@ class GameRoom extends Room {
             if (this.state.gameType === 'hangman' && !this.hangmanTeamsValid()) return;
             // Vibe Check needs a psychic plus at least one guesser
             if (this.state.gameType === 'vibecheck' && this.state.players.size < VIBECHECK_CONFIG.minPlayers) return;
+            // Draw It needs a drawer plus at least one guesser
+            if (this.state.gameType === 'drawit' && this.state.players.size < DRAWIT_CONFIG.minPlayers) return;
             this.startGame();
         });
     }
@@ -226,6 +249,7 @@ class GameRoom extends Room {
             player.score = 0;
             player.vibeGuess = -1;
             player.vibeLocked = false;
+            player.drawGuessed = false;
             player.segments = new ArraySchema();
 
             this.state.players.set(client.sessionId, player);
@@ -270,6 +294,7 @@ class GameRoom extends Room {
             player.score = 0;
             player.vibeGuess = -1;
             player.vibeLocked = false;
+            player.drawGuessed = false;
             player.segments = new ArraySchema();
 
             this.state.players.set(client.sessionId, player);
@@ -299,6 +324,11 @@ class GameRoom extends Room {
             this.state.hostId = client.sessionId;
         }
         this.updateMetadata();
+
+        // Late joiners to a running Draw It game need the board so far
+        if (this.state.phase === 'playing' && this.state.gameType === 'drawit') {
+            client.send('drawInit', { strokes: this.drawStrokes });
+        }
     }
 
     async onLeave(client, consented) {
@@ -371,6 +401,8 @@ class GameRoom extends Room {
             this.startHangmanGame();
         } else if (this.state.gameType === 'vibecheck') {
             this.startVibecheckGame();
+        } else if (this.state.gameType === 'drawit') {
+            this.startDrawitGame();
         } else {
             this.startBombermanGame();
         }
@@ -389,6 +421,10 @@ class GameRoom extends Room {
         if (this.vibeRoundTimeout) {
             clearTimeout(this.vibeRoundTimeout);
             this.vibeRoundTimeout = null;
+        }
+        if (this.drawRoundTimeout) {
+            clearTimeout(this.drawRoundTimeout);
+            this.drawRoundTimeout = null;
         }
 
         // Reset hangman round state (team assignments survive for a rematch)
@@ -418,6 +454,22 @@ class GameRoom extends Room {
         this.state.vibeTarget = -1;
         this.state.vibeDeadline = 0;
 
+        // Reset Draw It round state (round count survives for a rematch)
+        this.drawWord = '';
+        this.drawWordPool = [];
+        this.drawOrder = [];
+        this.drawIdx = -1;
+        this.drawStrokes = [];
+        this.drawCorrectCount = 0;
+        this.drawTurnPts = new Map();
+        this.drawHintTimes = [];
+        this.state.drawPhase = '';
+        this.state.drawDrawerId = '';
+        this.state.drawMasked = '';
+        this.state.drawWord = '';
+        this.state.drawRound = 0;
+        this.state.drawDeadline = 0;
+
         this.clearGameObjects();
         this.clearBoard();
 
@@ -430,6 +482,7 @@ class GameRoom extends Room {
             player.score = 0;
             player.vibeGuess = -1;
             player.vibeLocked = false;
+            player.drawGuessed = false;
             player.segments.splice(0, player.segments.length);
             const internal = this.playerInternal.get(sessionId);
             if (internal) {
@@ -462,6 +515,8 @@ class GameRoom extends Room {
             this.updateHangmanState();
         } else if (this.state.gameType === 'vibecheck') {
             this.updateVibecheckState();
+        } else if (this.state.gameType === 'drawit') {
+            this.updateDrawitState();
         } else {
             this.updateBombermanState();
         }
@@ -520,8 +575,9 @@ class GameRoom extends Room {
         // Only kick idle players who are actively in a game; people waiting
         // in the lobby or spectating aren't expected to send input.
         if (this.state.phase !== 'playing') return;
-        // Hangman and Vibe Check are turn-based: waiting players idle legitimately
-        if (this.state.gameType === 'hangman' || this.state.gameType === 'vibecheck') return;
+        // Hangman, Vibe Check and Draw It are turn-based: waiting players idle legitimately
+        if (this.state.gameType === 'hangman' || this.state.gameType === 'vibecheck'
+            || this.state.gameType === 'drawit') return;
         const now = Date.now();
         for (const [sessionId, internal] of this.playerInternal) {
             const player = this.state.players.get(sessionId);
@@ -539,11 +595,12 @@ class GameRoom extends Room {
         if (this.restartTimeout) clearTimeout(this.restartTimeout);
         if (this.hangmanRoundTimeout) clearTimeout(this.hangmanRoundTimeout);
         if (this.vibeRoundTimeout) clearTimeout(this.vibeRoundTimeout);
+        if (this.drawRoundTimeout) clearTimeout(this.drawRoundTimeout);
         for (const [, handle] of this.cleanupTimeouts) clearTimeout(handle);
     }
 }
 
 // Mix the per-game logic into the room
-Object.assign(GameRoom.prototype, bombermanMethods, snakeMethods, hangmanMethods, vibecheckMethods);
+Object.assign(GameRoom.prototype, bombermanMethods, snakeMethods, hangmanMethods, vibecheckMethods, drawitMethods);
 
 module.exports = { GameRoom, GameState };

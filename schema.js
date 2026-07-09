@@ -33,6 +33,8 @@ type('string')(Player.prototype, 'team');
 // Vibe Check: this round's guess on the 0–100 scale (-1 = not placed yet)
 type('number')(Player.prototype, 'vibeGuess');
 type('boolean')(Player.prototype, 'vibeLocked');
+// Draw It: whether this player already guessed the current word
+type('boolean')(Player.prototype, 'drawGuessed');
 
 class Bomb extends Schema {}
 type('number')(Bomb.prototype, 'x');
@@ -98,5 +100,15 @@ type('number')(GameState.prototype, 'vibeRound');
 type('number')(GameState.prototype, 'vibeTotalRounds');
 type('number')(GameState.prototype, 'vibeTarget');     // -1 while secret, 0–100 during reveal
 type('number')(GameState.prototype, 'vibeDeadline');   // phase deadline (ms timestamp, 0 = none)
+// ── Draw It state (unused for other games) ─────────────────────────
+// The word never leaves the server during a round; the drawer gets it
+// privately and everyone else only sees the mask (hint letters included).
+type('string')(GameState.prototype, 'drawPhase');      // '' | 'draw' | 'reveal'
+type('string')(GameState.prototype, 'drawDrawerId');   // sessionId of this round's drawer
+type('string')(GameState.prototype, 'drawMasked');     // e.g. '_a__ ___' (spaces shown)
+type('string')(GameState.prototype, 'drawWord');       // '' while secret, the word during reveal
+type('number')(GameState.prototype, 'drawRound');
+type('number')(GameState.prototype, 'drawTotalRounds');
+type('number')(GameState.prototype, 'drawDeadline');   // phase deadline (ms timestamp, 0 = none)
 
 module.exports = { Position, Player, Bomb, Explosion, Pickup, Wall, GameState };

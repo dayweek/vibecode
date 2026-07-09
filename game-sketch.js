@@ -186,7 +186,8 @@ function renderRoomList(rooms) {
         body.className = 'room-body';
         const gameLabel = meta.gameType === 'snake' ? '🐍 Snake'
             : meta.gameType === 'hangman' ? '🔤 Hangman'
-            : meta.gameType === 'vibecheck' ? '📡 Vibe Check' : '💣 Bomberman';
+            : meta.gameType === 'vibecheck' ? '📡 Vibe Check'
+            : meta.gameType === 'drawit' ? '✏️ Draw It' : '💣 Bomberman';
         body.innerHTML =
             `<div class="room-name">${escapeHtml(meta.hostName || 'Unknown')}'s room</div>` +
             `<div class="room-meta">${gameLabel} &middot; ${r.clients}/${r.maxClients} players &middot; ` +
@@ -229,6 +230,10 @@ function setupLobbyButtons() {
     if (gameVibecheckBtn) gameVibecheckBtn.addEventListener('click', () => {
         if (room) room.send('setGameType', 'vibecheck');
     });
+    const gameDrawitBtn = document.getElementById('lobby-game-drawit');
+    if (gameDrawitBtn) gameDrawitBtn.addEventListener('click', () => {
+        if (room) room.send('setGameType', 'drawit');
+    });
 
     // Hangman lobby setup: theme + rounds (host), team picks, random split (host)
     document.querySelectorAll('#hangman-themes .theme-btn').forEach(btn => {
@@ -246,6 +251,13 @@ function setupLobbyButtons() {
     document.querySelectorAll('#vibe-rounds .rounds-btn').forEach(btn => {
         btn.addEventListener('click', () => {
             if (room) room.send('setVibeRounds', parseInt(btn.dataset.rounds, 10));
+        });
+    });
+
+    // Draw It lobby setup: rounds (host)
+    document.querySelectorAll('#draw-rounds .rounds-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+            if (room) room.send('setDrawRounds', parseInt(btn.dataset.rounds, 10));
         });
     });
     const joinTeamA = document.getElementById('join-team-a');
@@ -374,6 +386,7 @@ async function connectToRoom(joinFn) {
             syncSnakeState(state);
             syncHangmanState(state);
             syncVibecheckState(state);
+            syncDrawitState(state);
 
             // Sync players from MapSchema
             const currentIds = new Set();
@@ -422,6 +435,7 @@ async function connectToRoom(joinFn) {
                     localPlayer.team = serverPlayer.team || '';
                     localPlayer.vibeGuess = serverPlayer.vibeGuess !== undefined ? serverPlayer.vibeGuess : -1;
                     localPlayer.vibeLocked = !!serverPlayer.vibeLocked;
+                    localPlayer.drawGuessed = !!serverPlayer.drawGuessed;
                     syncSnakeFields(localPlayer, serverPlayer);
                 } else {
                     players.set(id, {
@@ -452,6 +466,7 @@ async function connectToRoom(joinFn) {
                         team: serverPlayer.team || '',
                         vibeGuess: serverPlayer.vibeGuess !== undefined ? serverPlayer.vibeGuess : -1,
                         vibeLocked: !!serverPlayer.vibeLocked,
+                        drawGuessed: !!serverPlayer.drawGuessed,
                     });
                     syncSnakeFields(players.get(id), serverPlayer);
                 }
@@ -534,6 +549,9 @@ async function connectToRoom(joinFn) {
 
         // Vibe Check private target + reveal results
         setupVibecheckMessages(room);
+
+        // Draw It private word + stroke relay + guess feed
+        setupDrawitMessages(room);
 
         // Handle room errors and disconnection
         room.onError((code, message) => {
@@ -626,9 +644,9 @@ function updateScreens() {
         const minimalHud = gameType !== 'bomberman';
         const livesBox = document.getElementById('lives-status');
         if (livesBox) livesBox.style.display = minimalHud ? 'none' : '';
-        // The alive/playing counter means nothing in hangman or vibe check
+        // The alive/playing counter means nothing in hangman, vibe check or draw it
         const statsBox = document.getElementById('game-stats');
-        if (statsBox) statsBox.style.display = (gameType === 'hangman' || gameType === 'vibecheck') ? 'none' : '';
+        if (statsBox) statsBox.style.display = (gameType === 'hangman' || gameType === 'vibecheck' || gameType === 'drawit') ? 'none' : '';
         if (minimalHud) {
             const invisBox = document.getElementById('invisibility-status');
             if (invisBox) invisBox.style.display = 'none';
@@ -693,15 +711,18 @@ function updateLobbyUI() {
     const gameSnakeBtn = document.getElementById('lobby-game-snake');
     const gameHangmanBtn = document.getElementById('lobby-game-hangman');
     const gameVibecheckBtn = document.getElementById('lobby-game-vibecheck');
-    if (gameBombermanBtn && gameSnakeBtn && gameHangmanBtn && gameVibecheckBtn) {
+    const gameDrawitBtn = document.getElementById('lobby-game-drawit');
+    if (gameBombermanBtn && gameSnakeBtn && gameHangmanBtn && gameVibecheckBtn && gameDrawitBtn) {
         gameBombermanBtn.classList.toggle('active', gameType === 'bomberman');
         gameSnakeBtn.classList.toggle('active', gameType === 'snake');
         gameHangmanBtn.classList.toggle('active', gameType === 'hangman');
         gameVibecheckBtn.classList.toggle('active', gameType === 'vibecheck');
+        gameDrawitBtn.classList.toggle('active', gameType === 'drawit');
         gameBombermanBtn.disabled = !isHost;
         gameSnakeBtn.disabled = !isHost;
         gameHangmanBtn.disabled = !isHost;
         gameVibecheckBtn.disabled = !isHost;
+        gameDrawitBtn.disabled = !isHost;
     }
 
     // Hangman setup: rounds + team split (only visible when hangman is picked)
@@ -754,6 +775,18 @@ function updateLobbyUI() {
         vibeValid = players.size >= 2;
     }
 
+    // Draw It setup: rounds (only visible when draw it is picked)
+    const drawitSetup = document.getElementById('drawit-setup');
+    if (drawitSetup) drawitSetup.style.display = gameType === 'drawit' ? 'block' : 'none';
+    let drawValid = true;
+    if (gameType === 'drawit') {
+        document.querySelectorAll('#draw-rounds .rounds-btn').forEach(btn => {
+            btn.classList.toggle('active', parseInt(btn.dataset.rounds, 10) === drawit.totalRounds);
+            btn.disabled = !isHost;
+        });
+        drawValid = players.size >= 2;
+    }
+
     if (readyBtn) {
         readyBtn.style.display = isHost ? 'none' : 'block';
         const amReady = !!(me && me.ready);
@@ -762,7 +795,7 @@ function updateLobbyUI() {
     }
     if (startBtn) {
         startBtn.style.display = isHost ? 'block' : 'none';
-        startBtn.disabled = !othersReady || !teamsValid || !vibeValid;
+        startBtn.disabled = !othersReady || !teamsValid || !vibeValid || !drawValid;
     }
     if (statusEl) {
         if (isHost) {
@@ -772,6 +805,8 @@ function updateLobbyUI() {
                 statusEl.textContent = 'Split everyone into two teams to start.';
             } else if (!vibeValid) {
                 statusEl.textContent = 'Vibe Check needs at least 2 players.';
+            } else if (!drawValid) {
+                statusEl.textContent = 'Draw It needs at least 2 players.';
             } else {
                 statusEl.textContent = players.size > 1
                     ? "Everyone's ready. Light the fuse!"
@@ -800,9 +835,10 @@ function schemaArrayToPlain(schemaArray, fields) {
 // ── p5 lifecycle: render dispatch ───────────────────────────────────
 
 function draw() {
-    // Keep the psychic's clue input in sync with the current phase even
-    // when another screen or game is showing
+    // Keep the psychic's clue input and the guess input in sync with the
+    // current phase even when another screen or game is showing
     vibeUpdateClueBar();
+    drawUpdateGuessBar();
 
     // Nothing to render while in the lobby (canvas is hidden anyway)
     if (gamePhase !== 'playing') {
@@ -816,6 +852,8 @@ function draw() {
         drawHangmanGame();
     } else if (gameType === 'vibecheck') {
         drawVibecheckGame();
+    } else if (gameType === 'drawit') {
+        drawDrawitGame();
     } else {
         drawBombermanGame();
     }
@@ -845,6 +883,7 @@ function mousePressed() {
     if (!room || gamePhase !== 'playing') return true;
     if (gameType === 'hangman') return hangmanMousePressed();
     if (gameType === 'vibecheck') return vibecheckMousePressed();
+    if (gameType === 'drawit') return drawitMousePressed();
     return true;
 }
 
@@ -852,6 +891,15 @@ function mouseDragged() {
     if (event && event.target && event.target.tagName !== 'CANVAS') return true;
     if (!room || gamePhase !== 'playing') return true;
     if (gameType === 'vibecheck') return vibecheckMouseDragged();
+    if (gameType === 'drawit') return drawitMouseDragged();
+    return true;
+}
+
+function mouseReleased() {
+    // No target check here: a drag can end outside the canvas, and the
+    // drawer's in-progress stroke must still be flushed and closed.
+    if (!room || gamePhase !== 'playing') return true;
+    if (gameType === 'drawit') return drawitMouseReleased();
     return true;
 }
 
@@ -933,6 +981,9 @@ function keyPressed() {
     // Vibe Check: clue typing happens in an HTML input, guessing by mouse
     if (gameType === 'vibecheck') return false;
 
+    // Draw It: guesses are typed in an HTML input, drawing is mouse-only
+    if (gameType === 'drawit') return false;
+
     return bombermanKeyPressed();
 }
 
@@ -956,6 +1007,7 @@ function keyReleased() {
     if (gameType === 'snake') return false; // Snake has no key-release handling
     if (gameType === 'hangman') return false; // Hangman guesses on key press only
     if (gameType === 'vibecheck') return false; // Vibe Check is mouse-only
+    if (gameType === 'drawit') return false; // Draw It is mouse-only
     if (!players.has(playerId)) return false;
 
     return bombermanKeyReleased();
