@@ -1,6 +1,6 @@
 // ── Shared client core: connection, lobby UI and p5 lifecycle ──────
-// Per-game rendering/input lives in bomberman-sketch.js, snake-sketch.js
-// and hangman-sketch.js (all loaded together; p5 global mode).
+// Per-game rendering/input lives in bomberman-sketch.js, snake-sketch.js,
+// hangman-sketch.js and vibecheck-sketch.js (all loaded together; p5 global mode).
 
 let room; // Colyseus room instance
 let colyseusClient; // Colyseus client instance
@@ -10,7 +10,7 @@ let winnerId = null;
 
 // Lobby state
 let gamePhase = 'lobby'; // 'lobby' or 'playing' (synced from server)
-let gameType = 'bomberman'; // 'bomberman', 'snake' or 'hangman' (synced from server)
+let gameType = 'bomberman'; // 'bomberman', 'snake', 'hangman' or 'vibecheck' (synced from server)
 let hostId = '';
 
 let amSpectator = false;
@@ -185,7 +185,8 @@ function renderRoomList(rooms) {
         const body = document.createElement('div');
         body.className = 'room-body';
         const gameLabel = meta.gameType === 'snake' ? '🐍 Snake'
-            : meta.gameType === 'hangman' ? '🔤 Hangman' : '💣 Bomberman';
+            : meta.gameType === 'hangman' ? '🔤 Hangman'
+            : meta.gameType === 'vibecheck' ? '📡 Vibe Check' : '💣 Bomberman';
         body.innerHTML =
             `<div class="room-name">${escapeHtml(meta.hostName || 'Unknown')}'s room</div>` +
             `<div class="room-meta">${gameLabel} &middot; ${r.clients}/${r.maxClients} players &middot; ` +
@@ -224,6 +225,10 @@ function setupLobbyButtons() {
     if (gameHangmanBtn) gameHangmanBtn.addEventListener('click', () => {
         if (room) room.send('setGameType', 'hangman');
     });
+    const gameVibecheckBtn = document.getElementById('lobby-game-vibecheck');
+    if (gameVibecheckBtn) gameVibecheckBtn.addEventListener('click', () => {
+        if (room) room.send('setGameType', 'vibecheck');
+    });
 
     // Hangman lobby setup: theme + rounds (host), team picks, random split (host)
     document.querySelectorAll('#hangman-themes .theme-btn').forEach(btn => {
@@ -234,6 +239,13 @@ function setupLobbyButtons() {
     document.querySelectorAll('#hangman-rounds .rounds-btn').forEach(btn => {
         btn.addEventListener('click', () => {
             if (room) room.send('setRounds', parseInt(btn.dataset.rounds, 10));
+        });
+    });
+
+    // Vibe Check lobby setup: rounds (host)
+    document.querySelectorAll('#vibe-rounds .rounds-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+            if (room) room.send('setVibeRounds', parseInt(btn.dataset.rounds, 10));
         });
     });
     const joinTeamA = document.getElementById('join-team-a');
@@ -361,6 +373,7 @@ async function connectToRoom(joinFn) {
             syncBombermanState(state);
             syncSnakeState(state);
             syncHangmanState(state);
+            syncVibecheckState(state);
 
             // Sync players from MapSchema
             const currentIds = new Set();
@@ -407,6 +420,8 @@ async function connectToRoom(joinFn) {
                     localPlayer.ready = serverPlayer.ready;
                     localPlayer.isSpectator = serverPlayer.isSpectator;
                     localPlayer.team = serverPlayer.team || '';
+                    localPlayer.vibeGuess = serverPlayer.vibeGuess !== undefined ? serverPlayer.vibeGuess : -1;
+                    localPlayer.vibeLocked = !!serverPlayer.vibeLocked;
                     syncSnakeFields(localPlayer, serverPlayer);
                 } else {
                     players.set(id, {
@@ -435,6 +450,8 @@ async function connectToRoom(joinFn) {
                         ready: serverPlayer.ready,
                         isSpectator: serverPlayer.isSpectator,
                         team: serverPlayer.team || '',
+                        vibeGuess: serverPlayer.vibeGuess !== undefined ? serverPlayer.vibeGuess : -1,
+                        vibeLocked: !!serverPlayer.vibeLocked,
                     });
                     syncSnakeFields(players.get(id), serverPlayer);
                 }
@@ -514,6 +531,9 @@ async function connectToRoom(joinFn) {
 
         // Hangman guess/round-end feedback notices
         setupHangmanMessages(room);
+
+        // Vibe Check private target + reveal results
+        setupVibecheckMessages(room);
 
         // Handle room errors and disconnection
         room.onError((code, message) => {
@@ -606,9 +626,9 @@ function updateScreens() {
         const minimalHud = gameType !== 'bomberman';
         const livesBox = document.getElementById('lives-status');
         if (livesBox) livesBox.style.display = minimalHud ? 'none' : '';
-        // The alive/playing counter means nothing in hangman
+        // The alive/playing counter means nothing in hangman or vibe check
         const statsBox = document.getElementById('game-stats');
-        if (statsBox) statsBox.style.display = gameType === 'hangman' ? 'none' : '';
+        if (statsBox) statsBox.style.display = (gameType === 'hangman' || gameType === 'vibecheck') ? 'none' : '';
         if (minimalHud) {
             const invisBox = document.getElementById('invisibility-status');
             if (invisBox) invisBox.style.display = 'none';
@@ -672,13 +692,16 @@ function updateLobbyUI() {
     const gameBombermanBtn = document.getElementById('lobby-game-bomberman');
     const gameSnakeBtn = document.getElementById('lobby-game-snake');
     const gameHangmanBtn = document.getElementById('lobby-game-hangman');
-    if (gameBombermanBtn && gameSnakeBtn && gameHangmanBtn) {
+    const gameVibecheckBtn = document.getElementById('lobby-game-vibecheck');
+    if (gameBombermanBtn && gameSnakeBtn && gameHangmanBtn && gameVibecheckBtn) {
         gameBombermanBtn.classList.toggle('active', gameType === 'bomberman');
         gameSnakeBtn.classList.toggle('active', gameType === 'snake');
         gameHangmanBtn.classList.toggle('active', gameType === 'hangman');
+        gameVibecheckBtn.classList.toggle('active', gameType === 'vibecheck');
         gameBombermanBtn.disabled = !isHost;
         gameSnakeBtn.disabled = !isHost;
         gameHangmanBtn.disabled = !isHost;
+        gameVibecheckBtn.disabled = !isHost;
     }
 
     // Hangman setup: rounds + team split (only visible when hangman is picked)
@@ -719,6 +742,18 @@ function updateLobbyUI() {
         if (randomBtn) randomBtn.style.display = isHost ? 'block' : 'none';
     }
 
+    // Vibe Check setup: rounds (only visible when vibe check is picked)
+    const vibecheckSetup = document.getElementById('vibecheck-setup');
+    if (vibecheckSetup) vibecheckSetup.style.display = gameType === 'vibecheck' ? 'block' : 'none';
+    let vibeValid = true;
+    if (gameType === 'vibecheck') {
+        document.querySelectorAll('#vibe-rounds .rounds-btn').forEach(btn => {
+            btn.classList.toggle('active', parseInt(btn.dataset.rounds, 10) === vibe.totalRounds);
+            btn.disabled = !isHost;
+        });
+        vibeValid = players.size >= 2;
+    }
+
     if (readyBtn) {
         readyBtn.style.display = isHost ? 'none' : 'block';
         const amReady = !!(me && me.ready);
@@ -727,7 +762,7 @@ function updateLobbyUI() {
     }
     if (startBtn) {
         startBtn.style.display = isHost ? 'block' : 'none';
-        startBtn.disabled = !othersReady || !teamsValid;
+        startBtn.disabled = !othersReady || !teamsValid || !vibeValid;
     }
     if (statusEl) {
         if (isHost) {
@@ -735,6 +770,8 @@ function updateLobbyUI() {
                 statusEl.textContent = 'Waiting for everyone to ready up...';
             } else if (!teamsValid) {
                 statusEl.textContent = 'Split everyone into two teams to start.';
+            } else if (!vibeValid) {
+                statusEl.textContent = 'Vibe Check needs at least 2 players.';
             } else {
                 statusEl.textContent = players.size > 1
                     ? "Everyone's ready. Light the fuse!"
@@ -763,6 +800,10 @@ function schemaArrayToPlain(schemaArray, fields) {
 // ── p5 lifecycle: render dispatch ───────────────────────────────────
 
 function draw() {
+    // Keep the psychic's clue input in sync with the current phase even
+    // when another screen or game is showing
+    vibeUpdateClueBar();
+
     // Nothing to render while in the lobby (canvas is hidden anyway)
     if (gamePhase !== 'playing') {
         background(26);
@@ -773,9 +814,45 @@ function draw() {
         drawSnakeGame();
     } else if (gameType === 'hangman') {
         drawHangmanGame();
+    } else if (gameType === 'vibecheck') {
+        drawVibecheckGame();
     } else {
         drawBombermanGame();
     }
+}
+
+// Mouse position in canvas coordinates. p5 0.5.7 doesn't compensate for the
+// canvas being scaled down by CSS (max-height: 80vh), so do it ourselves.
+function canvasMouse() {
+    const cnv = document.querySelector('#canvas-container canvas');
+    if (cnv) {
+        const rect = cnv.getBoundingClientRect();
+        if (rect.width > 0 && rect.height > 0) {
+            return { x: mouseX * (width / rect.width), y: mouseY * (height / rect.height) };
+        }
+    }
+    return { x: mouseX, y: mouseY };
+}
+
+// ── p5 lifecycle: mouse dispatch ────────────────────────────────────
+// Hangman guesses and Vibe Check markers are mouse/tap driven.
+
+function mousePressed() {
+    // Returning false preventDefaults the event, which would stop clicks on
+    // the HTML UI (buttons, the Vibe Check clue input) from focusing/working
+    // — only ever grab clicks that land on the game canvas itself.
+    if (event && event.target && event.target.tagName !== 'CANVAS') return true;
+    if (!room || gamePhase !== 'playing') return true;
+    if (gameType === 'hangman') return hangmanMousePressed();
+    if (gameType === 'vibecheck') return vibecheckMousePressed();
+    return true;
+}
+
+function mouseDragged() {
+    if (event && event.target && event.target.tagName !== 'CANVAS') return true;
+    if (!room || gamePhase !== 'playing') return true;
+    if (gameType === 'vibecheck') return vibecheckMouseDragged();
+    return true;
 }
 
 function updateNameDisplay() {
@@ -853,6 +930,9 @@ function keyPressed() {
     // Hangman: guessing is done by clicking the letter buttons, not typing
     if (gameType === 'hangman') return false;
 
+    // Vibe Check: clue typing happens in an HTML input, guessing by mouse
+    if (gameType === 'vibecheck') return false;
+
     return bombermanKeyPressed();
 }
 
@@ -875,6 +955,7 @@ function keyReleased() {
     }
     if (gameType === 'snake') return false; // Snake has no key-release handling
     if (gameType === 'hangman') return false; // Hangman guesses on key press only
+    if (gameType === 'vibecheck') return false; // Vibe Check is mouse-only
     if (!players.has(playerId)) return false;
 
     return bombermanKeyReleased();

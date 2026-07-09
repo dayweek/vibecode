@@ -4,6 +4,7 @@ const { Player, GameState } = require('./schema');
 const { BOMBERMAN_CONFIG, bombermanMethods } = require('./bomberman-room');
 const { snakeMethods } = require('./snake-room');
 const { HANGMAN_CONFIG, hangmanMethods } = require('./hangman-room');
+const { VIBECHECK_CONFIG, vibecheckMethods } = require('./vibecheck-room');
 
 // ── Room-level constants ─────────────────────────────────────────────
 
@@ -54,6 +55,15 @@ class GameRoom extends Room {
         this.state.hangmanScoreB = 0;
         this.state.hangmanWrongA = 0;
         this.state.hangmanWrongB = 0;
+        this.state.vibePhase = '';
+        this.state.vibeScaleLeft = '';
+        this.state.vibeScaleRight = '';
+        this.state.vibeClue = '';
+        this.state.vibePsychicId = '';
+        this.state.vibeRound = 0;
+        this.state.vibeTotalRounds = VIBECHECK_CONFIG.defaultRounds;
+        this.state.vibeTarget = -1;
+        this.state.vibeDeadline = 0;
 
         this.maxClients = ROOM_CONFIG.maxPlayers;
 
@@ -71,6 +81,13 @@ class GameRoom extends Room {
         this.hangmanWords = [];
         this.hangmanRoundOver = false;
         this.hangmanRoundTimeout = null;
+
+        // Vibe Check internals (the target is never synced during a round)
+        this.vibeTarget = -1;
+        this.vibeScalePool = [];
+        this.vibePsychicOrder = [];
+        this.vibePsychicIdx = -1;
+        this.vibeRoundTimeout = null;
 
         // Per-player internal state (direction, activity time, hidden wall data)
         this.playerInternal = new Map();
@@ -97,6 +114,7 @@ class GameRoom extends Room {
         this.registerBombermanMessages();
         this.registerSnakeMessages();
         this.registerHangmanMessages();
+        this.registerVibecheckMessages();
 
         this.onMessage('update_player_name', (client, newName) => {
             const player = this.state.players.get(client.sessionId);
@@ -110,7 +128,7 @@ class GameRoom extends Room {
         this.onMessage('setGameType', (client, gameType) => {
             if (this.state.phase !== 'lobby') return;
             if (client.sessionId !== this.state.hostId) return;
-            if (!['bomberman', 'snake', 'hangman'].includes(gameType)) return;
+            if (!['bomberman', 'snake', 'hangman', 'vibecheck'].includes(gameType)) return;
             this.state.gameType = gameType;
             this.updateMetadata();
         });
@@ -132,6 +150,8 @@ class GameRoom extends Room {
             }
             // Hangman needs two non-empty teams with everyone assigned
             if (this.state.gameType === 'hangman' && !this.hangmanTeamsValid()) return;
+            // Vibe Check needs a psychic plus at least one guesser
+            if (this.state.gameType === 'vibecheck' && this.state.players.size < VIBECHECK_CONFIG.minPlayers) return;
             this.startGame();
         });
     }
@@ -204,6 +224,8 @@ class GameRoom extends Room {
             player.isSpectator = false;
             player.team = savedPlayer.team || '';
             player.score = 0;
+            player.vibeGuess = -1;
+            player.vibeLocked = false;
             player.segments = new ArraySchema();
 
             this.state.players.set(client.sessionId, player);
@@ -246,6 +268,8 @@ class GameRoom extends Room {
             player.isSpectator = this.state.phase === 'playing';
             player.team = '';
             player.score = 0;
+            player.vibeGuess = -1;
+            player.vibeLocked = false;
             player.segments = new ArraySchema();
 
             this.state.players.set(client.sessionId, player);
@@ -345,6 +369,8 @@ class GameRoom extends Room {
             this.startSnakeGame();
         } else if (this.state.gameType === 'hangman') {
             this.startHangmanGame();
+        } else if (this.state.gameType === 'vibecheck') {
+            this.startVibecheckGame();
         } else {
             this.startBombermanGame();
         }
@@ -360,6 +386,10 @@ class GameRoom extends Room {
             clearTimeout(this.hangmanRoundTimeout);
             this.hangmanRoundTimeout = null;
         }
+        if (this.vibeRoundTimeout) {
+            clearTimeout(this.vibeRoundTimeout);
+            this.vibeRoundTimeout = null;
+        }
 
         // Reset hangman round state (team assignments survive for a rematch)
         this.hangmanWord = '';
@@ -374,6 +404,20 @@ class GameRoom extends Room {
         this.state.hangmanWrongA = 0;
         this.state.hangmanWrongB = 0;
 
+        // Reset Vibe Check round state (round count survives for a rematch)
+        this.vibeTarget = -1;
+        this.vibeScalePool = [];
+        this.vibePsychicOrder = [];
+        this.vibePsychicIdx = -1;
+        this.state.vibePhase = '';
+        this.state.vibeScaleLeft = '';
+        this.state.vibeScaleRight = '';
+        this.state.vibeClue = '';
+        this.state.vibePsychicId = '';
+        this.state.vibeRound = 0;
+        this.state.vibeTarget = -1;
+        this.state.vibeDeadline = 0;
+
         this.clearGameObjects();
         this.clearBoard();
 
@@ -384,6 +428,8 @@ class GameRoom extends Room {
             player.killedBy = '';
             player.isMoving = false;
             player.score = 0;
+            player.vibeGuess = -1;
+            player.vibeLocked = false;
             player.segments.splice(0, player.segments.length);
             const internal = this.playerInternal.get(sessionId);
             if (internal) {
@@ -414,6 +460,8 @@ class GameRoom extends Room {
             this.updateSnakeState();
         } else if (this.state.gameType === 'hangman') {
             this.updateHangmanState();
+        } else if (this.state.gameType === 'vibecheck') {
+            this.updateVibecheckState();
         } else {
             this.updateBombermanState();
         }
@@ -472,8 +520,8 @@ class GameRoom extends Room {
         // Only kick idle players who are actively in a game; people waiting
         // in the lobby or spectating aren't expected to send input.
         if (this.state.phase !== 'playing') return;
-        // Hangman is turn-based: the waiting team idles legitimately
-        if (this.state.gameType === 'hangman') return;
+        // Hangman and Vibe Check are turn-based: waiting players idle legitimately
+        if (this.state.gameType === 'hangman' || this.state.gameType === 'vibecheck') return;
         const now = Date.now();
         for (const [sessionId, internal] of this.playerInternal) {
             const player = this.state.players.get(sessionId);
@@ -490,11 +538,12 @@ class GameRoom extends Room {
         console.log('GameRoom disposed');
         if (this.restartTimeout) clearTimeout(this.restartTimeout);
         if (this.hangmanRoundTimeout) clearTimeout(this.hangmanRoundTimeout);
+        if (this.vibeRoundTimeout) clearTimeout(this.vibeRoundTimeout);
         for (const [, handle] of this.cleanupTimeouts) clearTimeout(handle);
     }
 }
 
 // Mix the per-game logic into the room
-Object.assign(GameRoom.prototype, bombermanMethods, snakeMethods, hangmanMethods);
+Object.assign(GameRoom.prototype, bombermanMethods, snakeMethods, hangmanMethods, vibecheckMethods);
 
 module.exports = { GameRoom, GameState };

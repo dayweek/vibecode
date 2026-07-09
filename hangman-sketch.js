@@ -216,19 +216,6 @@ function hangmanLetterTile(i) {
     };
 }
 
-// Mouse position in canvas coordinates. p5 0.5.7 doesn't compensate for the
-// canvas being scaled down by CSS (max-height: 80vh), so do it ourselves.
-function hangmanCanvasMouse() {
-    const cnv = document.querySelector('#canvas-container canvas');
-    if (cnv) {
-        const rect = cnv.getBoundingClientRect();
-        if (rect.width > 0 && rect.height > 0) {
-            return { x: mouseX * (width / rect.width), y: mouseY * (height / rect.height) };
-        }
-    }
-    return { x: mouseX, y: mouseY };
-}
-
 // Whether the local player may guess right now
 function hangmanCanGuess() {
     const me = players.get(playerId);
@@ -239,7 +226,7 @@ function hangmanCanGuess() {
 
 function drawHangmanAlphabet() {
     const canGuess = hangmanCanGuess();
-    const m = hangmanCanvasMouse();
+    const m = canvasMouse();
     let hovering = false;
 
     textAlign(CENTER, CENTER);
@@ -285,11 +272,11 @@ function drawHangmanAlphabet() {
 // ── Input ───────────────────────────────────────────────────────────
 
 // Clicking (or tapping) a letter button submits a guess.
-// p5 global-mode hook: hangman is the only game with mouse input.
-function mousePressed() {
-    if (gameType !== 'hangman' || gamePhase !== 'playing' || winnerId) return;
-    if (!hangmanCanGuess()) return;
-    const m = hangmanCanvasMouse();
+// Dispatched from mousePressed in game-sketch.js.
+function hangmanMousePressed() {
+    if (winnerId) return true;
+    if (!hangmanCanGuess()) return true;
+    const m = canvasMouse();
     for (let i = 0; i < 26; i++) {
         const t = hangmanLetterTile(i);
         if (m.x >= t.x && m.x <= t.x + t.w && m.y >= t.y && m.y <= t.y + t.h) {

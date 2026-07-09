@@ -30,6 +30,9 @@ type('boolean')(Player.prototype, 'ready');
 type('boolean')(Player.prototype, 'isSpectator');
 // Hangman team: 'A', 'B' or '' (unassigned)
 type('string')(Player.prototype, 'team');
+// Vibe Check: this round's guess on the 0–100 scale (-1 = not placed yet)
+type('number')(Player.prototype, 'vibeGuess');
+type('boolean')(Player.prototype, 'vibeLocked');
 
 class Bomb extends Schema {}
 type('number')(Bomb.prototype, 'x');
@@ -83,5 +86,17 @@ type('number')(GameState.prototype, 'hangmanScoreA');
 type('number')(GameState.prototype, 'hangmanScoreB');
 type('number')(GameState.prototype, 'hangmanWrongA');
 type('number')(GameState.prototype, 'hangmanWrongB');
+// ── Vibe Check state (unused for other games) ──────────────────────
+// The target position never leaves the server during a round; it is sent
+// privately to the psychic and only synced here during the reveal.
+type('string')(GameState.prototype, 'vibePhase');      // '' | 'clue' | 'guess' | 'reveal'
+type('string')(GameState.prototype, 'vibeScaleLeft');  // left end of the scale
+type('string')(GameState.prototype, 'vibeScaleRight'); // right end of the scale
+type('string')(GameState.prototype, 'vibeClue');       // the psychic's clue
+type('string')(GameState.prototype, 'vibePsychicId');  // sessionId of this round's psychic
+type('number')(GameState.prototype, 'vibeRound');
+type('number')(GameState.prototype, 'vibeTotalRounds');
+type('number')(GameState.prototype, 'vibeTarget');     // -1 while secret, 0–100 during reveal
+type('number')(GameState.prototype, 'vibeDeadline');   // phase deadline (ms timestamp, 0 = none)
 
 module.exports = { Position, Player, Bomb, Explosion, Pickup, Wall, GameState };

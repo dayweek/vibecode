@@ -205,9 +205,10 @@
         /* ── Lobby game selector (host picks the game) ────────────── */
         #lobby-game-select {
             display: flex;
+            flex-wrap: wrap;
             gap: 10px;
         }
-        #lobby-game-select .px-btn { flex: 1; }
+        #lobby-game-select .px-btn { flex: 1 1 45%; }
         #lobby-game-select .px-btn.active {
             background-color: var(--fuse);
             color: #241505;
@@ -223,23 +224,52 @@
         #lobby-game-select .px-btn:disabled { cursor: default; }
         #lobby-game-select .px-btn.active:disabled { opacity: 1; }
 
-        /* ── Hangman lobby setup ──────────────────────────────────── */
+        /* ── Hangman / Vibe Check lobby setup ─────────────────────── */
         #hangman-rounds,
-        #hangman-themes {
+        #hangman-themes,
+        #vibe-rounds {
             display: flex;
             gap: 8px;
             flex-wrap: wrap;
         }
         #hangman-rounds .rounds-btn,
+        #vibe-rounds .rounds-btn,
         #hangman-themes .theme-btn { flex: 1; white-space: nowrap; }
         #hangman-rounds .rounds-btn.active,
+        #vibe-rounds .rounds-btn.active,
         #hangman-themes .theme-btn.active {
             background-color: var(--fuse);
             color: #241505;
             border-color: #241505;
         }
         #hangman-rounds .rounds-btn.active:disabled,
+        #vibe-rounds .rounds-btn.active:disabled,
         #hangman-themes .theme-btn.active:disabled { opacity: 1; }
+        #vibecheck-setup .vibe-hint {
+            margin: 10px 0 0;
+            color: var(--muted);
+            font-size: 17px;
+            line-height: 1.3;
+        }
+
+        /* ── Vibe Check clue input (psychic only, shown in-game) ──── */
+        #vibe-clue-bar {
+            display: none;
+            gap: 8px;
+            max-width: 960px;
+        }
+        #vibe-clue-bar input {
+            flex: 1;
+            min-width: 0;
+            padding: 10px 12px;
+            font-family: 'VT323', monospace;
+            font-size: 20px;
+            border: 3px solid var(--edge);
+            border-radius: 0;
+            background-color: #1b1426;
+            color: var(--ink);
+            box-sizing: border-box;
+        }
         #hangman-teams {
             display: flex;
             gap: 10px;
@@ -622,6 +652,19 @@
                 <button id="lobby-game-bomberman" class="px-btn">💣 Bomberman</button>
                 <button id="lobby-game-snake" class="px-btn">🐍 Snake</button>
                 <button id="lobby-game-hangman" class="px-btn">🔤 Hangman</button>
+                <button id="lobby-game-vibecheck" class="px-btn">📡 Vibe Check</button>
+            </div>
+            <div id="vibecheck-setup" style="display: none;">
+                <div class="rule-label">Rounds</div>
+                <div id="vibe-rounds">
+                    <button class="rounds-btn" data-rounds="3">3</button>
+                    <button class="rounds-btn" data-rounds="5">5</button>
+                    <button class="rounds-btn" data-rounds="7">7</button>
+                    <button class="rounds-btn" data-rounds="10">10</button>
+                </div>
+                <p class="vibe-hint">Each round one player is the psychic: they see a secret
+                spot on a scale like “Cheap ↔ Expensive” and give a clue.
+                Everyone else guesses where on the scale it sits — closer means more points.</p>
             </div>
             <div id="hangman-setup" style="display: none;">
                 <div class="rule-label">Word theme</div>
@@ -672,6 +715,10 @@
             <div id="canvas-container">
                 <!-- Canvas will be inserted here by p5.js -->
             </div>
+            <div id="vibe-clue-bar">
+                <input type="text" id="vibe-clue-input" maxlength="60" placeholder="Type a clue that sits exactly at the gold marker..." autocomplete="off">
+                <button id="vibe-clue-send" class="px-btn gold">Give clue</button>
+            </div>
             <div id="active-bombs-display" class="hud-box" style="display: none; max-width: 960px;">
                 <div id="active-bombs-list" style="font-size: 15px;"></div>
             </div>
@@ -718,5 +765,6 @@
     <script src="bomberman-sketch.js"></script>
     <script src="snake-sketch.js"></script>
     <script src="hangman-sketch.js"></script>
+    <script src="vibecheck-sketch.js"></script>
 </body>
 </html>
