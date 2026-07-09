@@ -16,6 +16,8 @@ const colyseusServer = new ColyseusServer({
         // Public listing of all rooms for the room browser
         app.get('/api/rooms', async (req, res) => {
             try {
+                // The room browser polls this; never let it be cached
+                res.set('Cache-Control', 'no-store');
                 const rooms = await matchMaker.query({ name: 'game' });
                 res.json(rooms.map(r => ({
                     roomId: r.roomId,

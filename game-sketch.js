@@ -134,13 +134,22 @@ function showScreen(name) {
 async function fetchRooms() {
     const listEl = document.getElementById('room-list');
     try {
-        const res = await fetch('/api/rooms');
+        const res = await fetch('/api/rooms', { cache: 'no-store' });
         const rooms = await res.json();
         renderRoomList(rooms);
     } catch (e) {
         if (listEl) listEl.innerHTML = '<p class="muted">Could not load rooms.</p>';
     }
 }
+
+// Background tabs throttle setInterval heavily, so the list can go stale
+// while the user is away — refresh it the moment the tab is visible again.
+document.addEventListener('visibilitychange', () => {
+    if (!document.hidden && roomPollInterval) fetchRooms();
+});
+window.addEventListener('focus', () => {
+    if (roomPollInterval) fetchRooms();
+});
 
 function escapeHtml(str) {
     return String(str).replace(/[&<>"']/g, c => ({
