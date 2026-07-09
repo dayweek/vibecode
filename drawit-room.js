@@ -161,7 +161,6 @@ const drawitMethods = {
                         (this.drawTurnPts.get(this.state.drawDrawerId) || 0) + DRAWIT_CONFIG.drawerPtsPerGuess);
                 }
                 this.broadcast('drawFeed', { name, correct: true, pts });
-                this.broadcast('playEatSound');
             } else {
                 // Wrong guesses are public banter; near-misses get a private nudge
                 this.broadcast('drawFeed', { name, text: guess });
@@ -268,7 +267,6 @@ const drawitMethods = {
         this.drawWord = word;
         const client = this.clients.find(c => c.sessionId === drawerId);
         if (client) client.send('drawWord', word);
-        this.broadcast('playNewSound');
     },
 
     // Reveal one hidden letter in the mask (keeps at least one hidden)
@@ -301,8 +299,6 @@ const drawitMethods = {
             drawerId: this.state.drawDrawerId,
             results,
         });
-        if (this.drawCorrectCount > 0) this.broadcast('playLevelUpSound');
-        else this.broadcast('playDieSound');
 
         this.drawRoundTimeout = setTimeout(() => {
             this.drawRoundTimeout = null;
@@ -331,7 +327,6 @@ const drawitMethods = {
         }
         this.state.winnerId = tie || !winner ? 'draw' : winner;
         console.log(`Draw It over: ${this.state.winnerId} (${bestScore} pts)`);
-        if (this.state.winnerId !== 'draw') this.broadcast('playWinSound');
         this.restartTimeout = setTimeout(() => this.returnToLobby(), 5000);
     },
 
@@ -351,7 +346,6 @@ const drawitMethods = {
         if (active.length === 1) {
             // Everyone else left mid-game: the last player standing wins
             this.state.winnerId = active[0];
-            this.broadcast('playWinSound');
             if (this.drawRoundTimeout) {
                 clearTimeout(this.drawRoundTimeout);
                 this.drawRoundTimeout = null;
