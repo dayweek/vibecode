@@ -381,4 +381,4 @@ const drawitMethods = {
     },
 };
 
-module.exports = { DRAWIT_CONFIG, DRAWIT_WORDS, drawitMethods };
+module.exports = { DRAWIT_CONFIG, DRAWIT_WORDS, drawitMethods, drawitIsClose };

@@ -35,6 +35,8 @@ type('number')(Player.prototype, 'vibeGuess');
 type('boolean')(Player.prototype, 'vibeLocked');
 // Draw It: whether this player already guessed the current word
 type('boolean')(Player.prototype, 'drawGuessed');
+// Who Am I?: whether this player already named the current character
+type('boolean')(Player.prototype, 'whoGuessed');
 
 class Bomb extends Schema {}
 type('number')(Bomb.prototype, 'x');
@@ -74,7 +76,8 @@ type('number')(GameState.prototype, 'gridHeight');
 // 'lobby' = waiting room, 'playing' = game in progress
 type('string')(GameState.prototype, 'phase');
 type('string')(GameState.prototype, 'hostId');
-// 'bomberman', 'snake' or 'hangman' — chosen by the host in the lobby
+// 'bomberman', 'snake', 'hangman', 'vibecheck', 'drawit' or 'whoami' —
+// chosen by the host in the lobby
 type('string')(GameState.prototype, 'gameType');
 // ── Hangman state (unused for other games) ─────────────────────────
 // The actual word never leaves the server; clients only see the mask.
@@ -110,5 +113,15 @@ type('string')(GameState.prototype, 'drawWord');       // '' while secret, the w
 type('number')(GameState.prototype, 'drawRound');
 type('number')(GameState.prototype, 'drawTotalRounds');
 type('number')(GameState.prototype, 'drawDeadline');   // phase deadline (ms timestamp, 0 = none)
+// ── Who Am I? state (unused for other games) ───────────────────────
+// The character name never leaves the server during a round; only the
+// clues revealed so far are synced (newline-joined, hard → easy).
+type('string')(GameState.prototype, 'whoPhase');         // '' | 'clue' | 'reveal'
+type('string')(GameState.prototype, 'whoCharacter');     // '' while secret, the name during reveal
+type('string')(GameState.prototype, 'whoClues');         // revealed clues joined with '\n'
+type('number')(GameState.prototype, 'whoCluesRevealed'); // 1–5 during a round
+type('number')(GameState.prototype, 'whoRound');
+type('number')(GameState.prototype, 'whoTotalRounds');
+type('number')(GameState.prototype, 'whoDeadline');      // round deadline (ms timestamp, 0 = none)
 
 module.exports = { Position, Player, Bomb, Explosion, Pickup, Wall, GameState };

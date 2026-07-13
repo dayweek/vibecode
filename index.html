@@ -224,11 +224,12 @@
         #lobby-game-select .px-btn:disabled { cursor: default; }
         #lobby-game-select .px-btn.active:disabled { opacity: 1; }
 
-        /* ── Hangman / Vibe Check / Draw It lobby setup ───────────── */
+        /* ── Hangman / Vibe Check / Draw It / Who Am I? lobby setup ─ */
         #hangman-rounds,
         #hangman-themes,
         #vibe-rounds,
-        #draw-rounds {
+        #draw-rounds,
+        #who-rounds {
             display: flex;
             gap: 8px;
             flex-wrap: wrap;
@@ -236,10 +237,12 @@
         #hangman-rounds .rounds-btn,
         #vibe-rounds .rounds-btn,
         #draw-rounds .rounds-btn,
+        #who-rounds .rounds-btn,
         #hangman-themes .theme-btn { flex: 1; white-space: nowrap; }
         #hangman-rounds .rounds-btn.active,
         #vibe-rounds .rounds-btn.active,
         #draw-rounds .rounds-btn.active,
+        #who-rounds .rounds-btn.active,
         #hangman-themes .theme-btn.active {
             background-color: var(--fuse);
             color: #241505;
@@ -248,24 +251,28 @@
         #hangman-rounds .rounds-btn.active:disabled,
         #vibe-rounds .rounds-btn.active:disabled,
         #draw-rounds .rounds-btn.active:disabled,
+        #who-rounds .rounds-btn.active:disabled,
         #hangman-themes .theme-btn.active:disabled { opacity: 1; }
         #vibecheck-setup .vibe-hint,
-        #drawit-setup .vibe-hint {
+        #drawit-setup .vibe-hint,
+        #whoami-setup .vibe-hint {
             margin: 10px 0 0;
             color: var(--muted);
             font-size: 17px;
             line-height: 1.3;
         }
 
-        /* ── Vibe Check clue / Draw It guess inputs (shown in-game) ─ */
+        /* ── Vibe Check clue / Draw It / Who Am I? guess inputs (in-game) ─ */
         #vibe-clue-bar,
-        #draw-guess-bar {
+        #draw-guess-bar,
+        #who-guess-bar {
             display: none;
             gap: 8px;
             max-width: 960px;
         }
         #vibe-clue-bar input,
-        #draw-guess-bar input {
+        #draw-guess-bar input,
+        #who-guess-bar input {
             flex: 1;
             min-width: 0;
             padding: 10px 12px;
@@ -661,6 +668,19 @@
                 <button id="lobby-game-hangman" class="px-btn">🔤 Hangman</button>
                 <button id="lobby-game-vibecheck" class="px-btn">📡 Vibe Check</button>
                 <button id="lobby-game-drawit" class="px-btn">✏️ Draw It</button>
+                <button id="lobby-game-whoami" class="px-btn">🎭 Who Am I?</button>
+            </div>
+            <div id="whoami-setup" style="display: none;">
+                <div class="rule-label">Rounds</div>
+                <div id="who-rounds">
+                    <button class="rounds-btn" data-rounds="3">3</button>
+                    <button class="rounds-btn" data-rounds="5">5</button>
+                    <button class="rounds-btn" data-rounds="7">7</button>
+                    <button class="rounds-btn" data-rounds="10">10</button>
+                </div>
+                <p class="vibe-hint">Each round a mystery character's clues are revealed
+                one by one. Everyone guesses who it is — the fewer clues you need,
+                the more points you score.</p>
             </div>
             <div id="drawit-setup" style="display: none;">
                 <div class="rule-label">Rounds</div>
@@ -743,6 +763,10 @@
                 <input type="text" id="draw-guess-input" maxlength="40" placeholder="What is being drawn? Type your guess..." autocomplete="off">
                 <button id="draw-guess-send" class="px-btn gold">Guess</button>
             </div>
+            <div id="who-guess-bar">
+                <input type="text" id="who-guess-input" maxlength="40" placeholder="Who is it? Type a name..." autocomplete="off">
+                <button id="who-guess-send" class="px-btn gold">Guess</button>
+            </div>
             <div id="active-bombs-display" class="hud-box" style="display: none; max-width: 960px;">
                 <div id="active-bombs-list" style="font-size: 15px;"></div>
             </div>
@@ -791,5 +815,6 @@
     <script src="hangman-sketch.js"></script>
     <script src="vibecheck-sketch.js"></script>
     <script src="drawit-sketch.js"></script>
+    <script src="whoami-sketch.js"></script>
 </body>
 </html>

@@ -6,6 +6,7 @@ const { snakeMethods } = require('./snake-room');
 const { HANGMAN_CONFIG, hangmanMethods } = require('./hangman-room');
 const { VIBECHECK_CONFIG, vibecheckMethods } = require('./vibecheck-room');
 const { DRAWIT_CONFIG, drawitMethods } = require('./drawit-room');
+const { WHOAMI_CONFIG, whoamiMethods } = require('./whoami-room');
 
 // ── Room-level constants ─────────────────────────────────────────────
 
@@ -23,9 +24,9 @@ const ROOM_CONFIG = {
 };
 
 // ── Room ─────────────────────────────────────────────────────────────
-// One room type plays all three games. The lobby lifecycle, join/leave and
+// One room type plays all the games. The lobby lifecycle, join/leave and
 // reconnection logic live here; the per-game logic is mixed into the
-// prototype from bomberman-room.js, snake-room.js and hangman-room.js.
+// prototype from the per-game *-room.js files.
 
 class GameRoom extends Room {
 
@@ -72,6 +73,13 @@ class GameRoom extends Room {
         this.state.drawRound = 0;
         this.state.drawTotalRounds = DRAWIT_CONFIG.defaultRounds;
         this.state.drawDeadline = 0;
+        this.state.whoPhase = '';
+        this.state.whoCharacter = '';
+        this.state.whoClues = '';
+        this.state.whoCluesRevealed = 0;
+        this.state.whoRound = 0;
+        this.state.whoTotalRounds = WHOAMI_CONFIG.defaultRounds;
+        this.state.whoDeadline = 0;
 
         this.maxClients = ROOM_CONFIG.maxPlayers;
 
@@ -109,6 +117,14 @@ class GameRoom extends Room {
         this.drawHintTimes = [];
         this.drawRoundTimeout = null;
 
+        // Who Am I? internals (the character is never synced during a round)
+        this.whoCharacter = null;
+        this.whoAnswers = [];
+        this.whoPool = [];
+        this.whoTurnPts = new Map();
+        this.whoClueTimes = [];
+        this.whoRoundTimeout = null;
+
         // Per-player internal state (direction, activity time, hidden wall data)
         this.playerInternal = new Map();
         // Map of persistentId -> saved player data for reconnection
@@ -136,6 +152,7 @@ class GameRoom extends Room {
         this.registerHangmanMessages();
         this.registerVibecheckMessages();
         this.registerDrawitMessages();
+        this.registerWhoamiMessages();
 
         this.onMessage('update_player_name', (client, newName) => {
             const player = this.state.players.get(client.sessionId);
@@ -149,7 +166,7 @@ class GameRoom extends Room {
         this.onMessage('setGameType', (client, gameType) => {
             if (this.state.phase !== 'lobby') return;
             if (client.sessionId !== this.state.hostId) return;
-            if (!['bomberman', 'snake', 'hangman', 'vibecheck', 'drawit'].includes(gameType)) return;
+            if (!['bomberman', 'snake', 'hangman', 'vibecheck', 'drawit', 'whoami'].includes(gameType)) return;
             this.state.gameType = gameType;
             this.updateMetadata();
         });
@@ -250,6 +267,7 @@ class GameRoom extends Room {
             player.vibeGuess = -1;
             player.vibeLocked = false;
             player.drawGuessed = false;
+            player.whoGuessed = false;
             player.segments = new ArraySchema();
 
             this.state.players.set(client.sessionId, player);
@@ -295,6 +313,7 @@ class GameRoom extends Room {
             player.vibeGuess = -1;
             player.vibeLocked = false;
             player.drawGuessed = false;
+            player.whoGuessed = false;
             player.segments = new ArraySchema();
 
             this.state.players.set(client.sessionId, player);
@@ -403,6 +422,8 @@ class GameRoom extends Room {
             this.startVibecheckGame();
         } else if (this.state.gameType === 'drawit') {
             this.startDrawitGame();
+        } else if (this.state.gameType === 'whoami') {
+            this.startWhoamiGame();
         } else {
             this.startBombermanGame();
         }
@@ -425,6 +446,10 @@ class GameRoom extends Room {
         if (this.drawRoundTimeout) {
             clearTimeout(this.drawRoundTimeout);
             this.drawRoundTimeout = null;
+        }
+        if (this.whoRoundTimeout) {
+            clearTimeout(this.whoRoundTimeout);
+            this.whoRoundTimeout = null;
         }
 
         // Reset hangman round state (team assignments survive for a rematch)
@@ -470,6 +495,19 @@ class GameRoom extends Room {
         this.state.drawRound = 0;
         this.state.drawDeadline = 0;
 
+        // Reset Who Am I? round state (round count survives for a rematch)
+        this.whoCharacter = null;
+        this.whoAnswers = [];
+        this.whoPool = [];
+        this.whoTurnPts = new Map();
+        this.whoClueTimes = [];
+        this.state.whoPhase = '';
+        this.state.whoCharacter = '';
+        this.state.whoClues = '';
+        this.state.whoCluesRevealed = 0;
+        this.state.whoRound = 0;
+        this.state.whoDeadline = 0;
+
         this.clearGameObjects();
         this.clearBoard();
 
@@ -483,6 +521,7 @@ class GameRoom extends Room {
             player.vibeGuess = -1;
             player.vibeLocked = false;
             player.drawGuessed = false;
+            player.whoGuessed = false;
             player.segments.splice(0, player.segments.length);
             const internal = this.playerInternal.get(sessionId);
             if (internal) {
@@ -517,6 +556,8 @@ class GameRoom extends Room {
             this.updateVibecheckState();
         } else if (this.state.gameType === 'drawit') {
             this.updateDrawitState();
+        } else if (this.state.gameType === 'whoami') {
+            this.updateWhoamiState();
         } else {
             this.updateBombermanState();
         }
@@ -575,9 +616,10 @@ class GameRoom extends Room {
         // Only kick idle players who are actively in a game; people waiting
         // in the lobby or spectating aren't expected to send input.
         if (this.state.phase !== 'playing') return;
-        // Hangman, Vibe Check and Draw It are turn-based: waiting players idle legitimately
+        // Hangman, Vibe Check, Draw It and Who Am I? pace themselves with
+        // deadlines: waiting or stumped players idle legitimately
         if (this.state.gameType === 'hangman' || this.state.gameType === 'vibecheck'
-            || this.state.gameType === 'drawit') return;
+            || this.state.gameType === 'drawit' || this.state.gameType === 'whoami') return;
         const now = Date.now();
         for (const [sessionId, internal] of this.playerInternal) {
             const player = this.state.players.get(sessionId);
@@ -596,11 +638,12 @@ class GameRoom extends Room {
         if (this.hangmanRoundTimeout) clearTimeout(this.hangmanRoundTimeout);
         if (this.vibeRoundTimeout) clearTimeout(this.vibeRoundTimeout);
         if (this.drawRoundTimeout) clearTimeout(this.drawRoundTimeout);
+        if (this.whoRoundTimeout) clearTimeout(this.whoRoundTimeout);
         for (const [, handle] of this.cleanupTimeouts) clearTimeout(handle);
     }
 }
 
 // Mix the per-game logic into the room
-Object.assign(GameRoom.prototype, bombermanMethods, snakeMethods, hangmanMethods, vibecheckMethods, drawitMethods);
+Object.assign(GameRoom.prototype, bombermanMethods, snakeMethods, hangmanMethods, vibecheckMethods, drawitMethods, whoamiMethods);
 
 module.exports = { GameRoom, GameState };
