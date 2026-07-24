@@ -39,7 +39,9 @@ function setup() {
     } else {
         canvas.parent('game-container');
     }
-    frameRate(30);
+    // 60fps keeps fast continuous motion smooth (Space Hunt bullets/ships).
+    // All game logic is timestamp-driven, so the rate only affects rendering.
+    frameRate(60);
 
     // Handle welcome modal
     const welcomeModal = document.getElementById('welcome-modal');
@@ -197,7 +199,8 @@ function renderRoomList(rooms) {
             : meta.gameType === 'hangman' ? '🔤 Hangman'
             : meta.gameType === 'vibecheck' ? '📡 Vibe Check'
             : meta.gameType === 'drawit' ? '✏️ Draw It'
-            : meta.gameType === 'whoami' ? '🎭 Who Am I?' : '💣 Bomberman';
+            : meta.gameType === 'whoami' ? '🎭 Who Am I?'
+            : meta.gameType === 'spacehunt' ? '🚀 Space Hunt' : '💣 Bomberman';
         body.innerHTML =
             `<div class="room-name">${escapeHtml(meta.hostName || 'Unknown')}'s room</div>` +
             `<div class="room-meta">${gameLabel} &middot; ${r.clients}/${r.maxClients} players &middot; ` +
@@ -247,6 +250,10 @@ function setupLobbyButtons() {
     const gameWhoamiBtn = document.getElementById('lobby-game-whoami');
     if (gameWhoamiBtn) gameWhoamiBtn.addEventListener('click', () => {
         if (room) room.send('setGameType', 'whoami');
+    });
+    const gameSpacehuntBtn = document.getElementById('lobby-game-spacehunt');
+    if (gameSpacehuntBtn) gameSpacehuntBtn.addEventListener('click', () => {
+        if (room) room.send('setGameType', 'spacehunt');
     });
 
     // Hangman lobby setup: theme + rounds (host), team picks, random split (host)
@@ -409,6 +416,7 @@ async function connectToRoom(joinFn) {
             syncVibecheckState(state);
             syncDrawitState(state);
             syncWhoamiState(state);
+            syncSpacehuntState(state);
 
             // Sync players from MapSchema
             const currentIds = new Set();
@@ -459,7 +467,9 @@ async function connectToRoom(joinFn) {
                     localPlayer.vibeLocked = !!serverPlayer.vibeLocked;
                     localPlayer.drawGuessed = !!serverPlayer.drawGuessed;
                     localPlayer.whoGuessed = !!serverPlayer.whoGuessed;
+                    localPlayer.angle = serverPlayer.angle || 0;
                     syncSnakeFields(localPlayer, serverPlayer);
+                    syncSpacehuntFields(localPlayer, serverPlayer);
                 } else {
                     players.set(id, {
                         id: id,
@@ -491,8 +501,10 @@ async function connectToRoom(joinFn) {
                         vibeLocked: !!serverPlayer.vibeLocked,
                         drawGuessed: !!serverPlayer.drawGuessed,
                         whoGuessed: !!serverPlayer.whoGuessed,
+                        angle: serverPlayer.angle || 0,
                     });
                     syncSnakeFields(players.get(id), serverPlayer);
+                    syncSpacehuntFields(players.get(id), serverPlayer);
                 }
             });
 
@@ -741,19 +753,22 @@ function updateLobbyUI() {
     const gameVibecheckBtn = document.getElementById('lobby-game-vibecheck');
     const gameDrawitBtn = document.getElementById('lobby-game-drawit');
     const gameWhoamiBtn = document.getElementById('lobby-game-whoami');
-    if (gameBombermanBtn && gameSnakeBtn && gameHangmanBtn && gameVibecheckBtn && gameDrawitBtn && gameWhoamiBtn) {
+    const gameSpacehuntBtn = document.getElementById('lobby-game-spacehunt');
+    if (gameBombermanBtn && gameSnakeBtn && gameHangmanBtn && gameVibecheckBtn && gameDrawitBtn && gameWhoamiBtn && gameSpacehuntBtn) {
         gameBombermanBtn.classList.toggle('active', gameType === 'bomberman');
         gameSnakeBtn.classList.toggle('active', gameType === 'snake');
         gameHangmanBtn.classList.toggle('active', gameType === 'hangman');
         gameVibecheckBtn.classList.toggle('active', gameType === 'vibecheck');
         gameDrawitBtn.classList.toggle('active', gameType === 'drawit');
         gameWhoamiBtn.classList.toggle('active', gameType === 'whoami');
+        gameSpacehuntBtn.classList.toggle('active', gameType === 'spacehunt');
         gameBombermanBtn.disabled = !isHost;
         gameSnakeBtn.disabled = !isHost;
         gameHangmanBtn.disabled = !isHost;
         gameVibecheckBtn.disabled = !isHost;
         gameDrawitBtn.disabled = !isHost;
         gameWhoamiBtn.disabled = !isHost;
+        gameSpacehuntBtn.disabled = !isHost;
     }
 
     // Hangman setup: rounds + team split (only visible when hangman is picked)
@@ -828,6 +843,12 @@ function updateLobbyUI() {
         });
     }
 
+    // Space Hunt setup: just a controls blurb (no per-match options)
+    const spacehuntSetup = document.getElementById('spacehunt-setup');
+    if (spacehuntSetup) spacehuntSetup.style.display = gameType === 'spacehunt' ? 'block' : 'none';
+    let spaceValid = true;
+    if (gameType === 'spacehunt') spaceValid = players.size >= 2;
+
     if (readyBtn) {
         readyBtn.style.display = isHost ? 'none' : 'block';
         const amReady = !!(me && me.ready);
@@ -836,7 +857,7 @@ function updateLobbyUI() {
     }
     if (startBtn) {
         startBtn.style.display = isHost ? 'block' : 'none';
-        startBtn.disabled = !othersReady || !teamsValid || !vibeValid || !drawValid;
+        startBtn.disabled = !othersReady || !teamsValid || !vibeValid || !drawValid || !spaceValid;
     }
     if (statusEl) {
         if (isHost) {
@@ -848,6 +869,8 @@ function updateLobbyUI() {
                 statusEl.textContent = 'Vibe Check needs at least 2 players.';
             } else if (!drawValid) {
                 statusEl.textContent = 'Draw It needs at least 2 players.';
+            } else if (!spaceValid) {
+                statusEl.textContent = 'Space Hunt needs at least 2 players.';
             } else {
                 statusEl.textContent = players.size > 1
                     ? "Everyone's ready. Light the fuse!"
@@ -898,6 +921,8 @@ function draw() {
         drawDrawitGame();
     } else if (gameType === 'whoami') {
         drawWhoamiGame();
+    } else if (gameType === 'spacehunt') {
+        drawSpacehuntGame();
     } else {
         drawBombermanGame();
     }
@@ -1031,6 +1056,9 @@ function keyPressed() {
     // Who Am I?: guesses are typed in an HTML input
     if (gameType === 'whoami') return false;
 
+    // Space Hunt: held-key flight controls + Space to fire
+    if (gameType === 'spacehunt') return spacehuntKeyPressed();
+
     return bombermanKeyPressed();
 }
 
@@ -1056,6 +1084,7 @@ function keyReleased() {
     if (gameType === 'vibecheck') return false; // Vibe Check is mouse-only
     if (gameType === 'drawit') return false; // Draw It is mouse-only
     if (gameType === 'whoami') return false; // Who Am I? guesses via HTML input
+    if (gameType === 'spacehunt') return spacehuntKeyReleased();
     if (!players.has(playerId)) return false;
 
     return bombermanKeyReleased();

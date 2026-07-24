@@ -37,6 +37,8 @@ type('boolean')(Player.prototype, 'vibeLocked');
 type('boolean')(Player.prototype, 'drawGuessed');
 // Who Am I?: whether this player already named the current character
 type('boolean')(Player.prototype, 'whoGuessed');
+// Space Hunt: ship heading in radians (velocity stays server-side)
+type('number')(Player.prototype, 'angle');
 
 class Bomb extends Schema {}
 type('number')(Bomb.prototype, 'x');
@@ -59,6 +61,27 @@ type('string')(Pickup.prototype, 'pickupType');
 class Wall extends Schema {}
 type('number')(Wall.prototype, 'x');
 type('number')(Wall.prototype, 'y');
+
+// ── Space Hunt entities ─────────────────────────────────────────────
+// Self-contained (like Bomb): the server mutates x,y each tick. IDs let the
+// client preserve render state and smoothly predict moving entities between
+// room updates.
+class Bullet extends Schema {}
+type('number')(Bullet.prototype, 'id');
+type('number')(Bullet.prototype, 'x');
+type('number')(Bullet.prototype, 'y');
+type('number')(Bullet.prototype, 'vx');
+type('number')(Bullet.prototype, 'vy');
+type('string')(Bullet.prototype, 'ownerId');
+type('number')(Bullet.prototype, 'born');
+
+class Asteroid extends Schema {}
+type('number')(Asteroid.prototype, 'id');
+type('number')(Asteroid.prototype, 'x');
+type('number')(Asteroid.prototype, 'y');
+type('number')(Asteroid.prototype, 'vx');
+type('number')(Asteroid.prototype, 'vy');
+type('number')(Asteroid.prototype, 'radius');
 
 class GameState extends Schema {}
 type({ map: Player })(GameState.prototype, 'players');
@@ -123,5 +146,8 @@ type('number')(GameState.prototype, 'whoCluesRevealed'); // 1–5 during a round
 type('number')(GameState.prototype, 'whoRound');
 type('number')(GameState.prototype, 'whoTotalRounds');
 type('number')(GameState.prototype, 'whoDeadline');      // round deadline (ms timestamp, 0 = none)
+// ── Space Hunt state (unused for other games) ──────────────────────
+type([Bullet])(GameState.prototype, 'bullets');
+type([Asteroid])(GameState.prototype, 'asteroids');
 
-module.exports = { Position, Player, Bomb, Explosion, Pickup, Wall, GameState };
+module.exports = { Position, Player, Bomb, Explosion, Pickup, Wall, Bullet, Asteroid, GameState };

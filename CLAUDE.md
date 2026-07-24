@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-A real-time multiplayer gaming platform with six games — **Bomberman**, **Snake**, **Hangman**, **Vibe Check**, **Draw It** and **Who Am I?** — played through a single room system. Built with Node.js, **Colyseus** (`colyseus` + `@colyseus/ws-transport`), Express (static files + room-list API), and p5.js on the client.
+A real-time multiplayer gaming platform with seven games — **Bomberman**, **Snake**, **Hangman**, **Vibe Check**, **Draw It**, **Who Am I?** and **Space Hunt** — played through a single room system. Built with Node.js, **Colyseus** (`colyseus` + `@colyseus/ws-transport`), Express (static files + room-list API), and p5.js on the client.
 
 There is one entry point: `/` shows a public room browser. Anyone can create a room (becoming its host), and inside the room's lobby the host picks which game to play. There are no per-game URLs.
 
@@ -23,18 +23,18 @@ Server (Node/Colyseus):
 - `server.js` — Colyseus server; serves static files, exposes `GET /api/rooms` (public room list), defines the single `game` room type
 - `schema.js` — the unified Colyseus schema shared by all games (`GameState`, `Player`, `Bomb`, `Wall`, …)
 - `game-room.js` — `GameRoom`: lobby lifecycle, join/leave/reconnection, game dispatch; per-game logic is mixed into its prototype from the six `*-room.js` files
-- `bomberman-room.js` / `snake-room.js` / `hangman-room.js` / `vibecheck-room.js` / `drawit-room.js` / `whoami-room.js` — each game's config, message handlers and game loop (exported as method objects, `this` = the room)
+- `bomberman-room.js` / `snake-room.js` / `hangman-room.js` / `vibecheck-room.js` / `drawit-room.js` / `whoami-room.js` / `spacehunt-room.js` — each game's config, message handlers and game loop (exported as method objects, `this` = the room)
 
 Client (p5.js, global mode — all files share globals):
 
 - `index.html` — the whole client UI: welcome modal (name), room browser, lobby, and in-game HUD; loads the seven sketch files
 - `game-sketch.js` — shared core: Colyseus connection, room browser/lobby UI, player state sync, sounds, and p5 lifecycle dispatch (`draw`/`keyPressed`/`mousePressed`/… route to the active game)
-- `bomberman-sketch.js` / `snake-sketch.js` / `hangman-sketch.js` / `vibecheck-sketch.js` / `drawit-sketch.js` / `whoami-sketch.js` — each game's asset loading, state sync (`sync*State`), rendering (`draw*Game`) and input handlers
+- `bomberman-sketch.js` / `snake-sketch.js` / `hangman-sketch.js` / `vibecheck-sketch.js` / `drawit-sketch.js` / `whoami-sketch.js` / `spacehunt-sketch.js` — each game's asset loading, state sync (`sync*State`), rendering (`draw*Game`) and input handlers
 - `bomberman-assets/` — sprites and sounds for Bomberman rendering (character sprites are also used for lobby avatars)
 
 ## Room Lifecycle (all games)
 
-- One Colyseus room type: `game`. Room state has `phase` (`'lobby'` | `'playing'`) and `gameType` (`'bomberman'` | `'snake'` | `'hangman'` | `'vibecheck'` | `'drawit'` | `'whoami'`).
+- One Colyseus room type: `game`. Room state has `phase` (`'lobby'` | `'playing'`) and `gameType` (`'bomberman'` | `'snake'` | `'hangman'` | `'vibecheck'` | `'drawit'` | `'whoami'` | `'spacehunt'`).
 - Anyone can create a room from the room browser and becomes its host; rooms are listed via `GET /api/rooms` (metadata: `hostName`, `phase`, `playerCount`, `gameType`) and joinable via `/?room=<roomId>`.
 - In the lobby, the **host selects the game** (`setGameType` message; server validates host + lobby phase). Non-hosts see the selection but can't change it.
 - Non-host players toggle Ready (`setReady`); the host can start (`startGame`) only when all others are ready.
@@ -101,6 +101,17 @@ Client (p5.js, global mode — all files share globals):
 - Scoring: points = 6 − clues revealed when you answer (5/4/3/2/1); totals reuse `Player.score`
 - The round reveals when everyone has guessed correctly or 15s after the last clue (75s cap) → `whoReveal` message + the name synced into `whoCharacter`; highest total after the last round wins (`winnerId` = sessionId or `'draw'`)
 - Inactivity kick disabled like the other party games; solo games skip the last-player-standing walkover (`participantsAtStart > 1` guard)
+
+## Space Hunt
+
+- Asteroids-style real-time PvP deathmatch; needs at least 2 players (`minPlayers 2`). No rounds, no lobby config — first to **20 kills** wins
+- Each player flies a triangular ship on a borderless 900x700 arena with **continuous** momentum physics: **↑/W** thrusts, **←→/A D** rotate, **Space** fires. All movement wraps toroidally (leave any edge, reappear on the opposite side)
+- Physics runs on the shared 100 ms room tick; ships have `x,y` + `angle` synced (velocity/held-input/respawn/fire timers live in `playerInternal`). The client interpolates position and heading between ticks (`syncSpacehuntFields`, mirroring snake)
+- Held controls are sent to the server only when they change (`spaceInput` `{t,l,r,f}`, Bomberman-style), not per frame. Firing is held-to-shoot, gated server-side by `fireCooldown`
+- Bullets (`GameState.bullets`, self-contained `Bullet` schema) travel, wrap, and expire after `bulletLife`; a bullet hitting a rival ship destroys it and scores the shooter **+1** (never self-hits or spawn-protected targets)
+- Asteroids (`GameState.asteroids`, `Asteroid` schema) spawn off a random edge, drift across and despawn when off-screen (they **pass**, they don't wrap); touching one destroys a ship but scores nobody. **Bullets pass through asteroids** — they're indestructible hazards
+- A destroyed ship respawns after `respawnDelay` (3 s) at a spot clear of asteroids with `spawnProtection` (~2.5 s, reuses `Player.protectedUntil`) of invulnerability; the client blinks the ship and shows a "respawning" notice
+- Reaching 20 kills sets `winnerId` = sessionId, broadcasts the win sound and returns everyone to the lobby after 5 s. Real-time like snake, so the inactivity kick stays enabled
 
 ## Audio Files
 

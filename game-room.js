@@ -7,6 +7,7 @@ const { HANGMAN_CONFIG, hangmanMethods } = require('./hangman-room');
 const { VIBECHECK_CONFIG, vibecheckMethods } = require('./vibecheck-room');
 const { DRAWIT_CONFIG, drawitMethods } = require('./drawit-room');
 const { WHOAMI_CONFIG, whoamiMethods } = require('./whoami-room');
+const { SPACEHUNT_CONFIG, spacehuntMethods } = require('./spacehunt-room');
 
 // ── Room-level constants ─────────────────────────────────────────────
 
@@ -41,6 +42,8 @@ class GameRoom extends Room {
         this.state.destructibleWalls = new ArraySchema();
         this.state.lavaTiles = new ArraySchema();
         this.state.food = new ArraySchema();
+        this.state.bullets = new ArraySchema();
+        this.state.asteroids = new ArraySchema();
         this.state.winnerId = '';
         this.state.gridWidth = 0;
         this.state.gridHeight = 0;
@@ -153,6 +156,7 @@ class GameRoom extends Room {
         this.registerVibecheckMessages();
         this.registerDrawitMessages();
         this.registerWhoamiMessages();
+        this.registerSpacehuntMessages();
 
         this.onMessage('update_player_name', (client, newName) => {
             const player = this.state.players.get(client.sessionId);
@@ -166,7 +170,7 @@ class GameRoom extends Room {
         this.onMessage('setGameType', (client, gameType) => {
             if (this.state.phase !== 'lobby') return;
             if (client.sessionId !== this.state.hostId) return;
-            if (!['bomberman', 'snake', 'hangman', 'vibecheck', 'drawit', 'whoami'].includes(gameType)) return;
+            if (!['bomberman', 'snake', 'hangman', 'vibecheck', 'drawit', 'whoami', 'spacehunt'].includes(gameType)) return;
             this.state.gameType = gameType;
             this.updateMetadata();
         });
@@ -192,6 +196,8 @@ class GameRoom extends Room {
             if (this.state.gameType === 'vibecheck' && this.state.players.size < VIBECHECK_CONFIG.minPlayers) return;
             // Draw It needs a drawer plus at least one guesser
             if (this.state.gameType === 'drawit' && this.state.players.size < DRAWIT_CONFIG.minPlayers) return;
+            // Space Hunt is a deathmatch — needs at least two ships
+            if (this.state.gameType === 'spacehunt' && this.state.players.size < SPACEHUNT_CONFIG.minPlayers) return;
             this.startGame();
         });
     }
@@ -268,6 +274,7 @@ class GameRoom extends Room {
             player.vibeLocked = false;
             player.drawGuessed = false;
             player.whoGuessed = false;
+            player.angle = 0;
             player.segments = new ArraySchema();
 
             this.state.players.set(client.sessionId, player);
@@ -314,6 +321,7 @@ class GameRoom extends Room {
             player.vibeLocked = false;
             player.drawGuessed = false;
             player.whoGuessed = false;
+            player.angle = 0;
             player.segments = new ArraySchema();
 
             this.state.players.set(client.sessionId, player);
@@ -424,6 +432,8 @@ class GameRoom extends Room {
             this.startDrawitGame();
         } else if (this.state.gameType === 'whoami') {
             this.startWhoamiGame();
+        } else if (this.state.gameType === 'spacehunt') {
+            this.startSpacehuntGame();
         } else {
             this.startBombermanGame();
         }
@@ -508,6 +518,11 @@ class GameRoom extends Room {
         this.state.whoRound = 0;
         this.state.whoDeadline = 0;
 
+        // Reset Space Hunt state (no per-match config to preserve)
+        this.state.bullets.splice(0, this.state.bullets.length);
+        this.state.asteroids.splice(0, this.state.asteroids.length);
+        this.spaceNextAsteroid = 0;
+
         this.clearGameObjects();
         this.clearBoard();
 
@@ -518,6 +533,7 @@ class GameRoom extends Room {
             player.killedBy = '';
             player.isMoving = false;
             player.score = 0;
+            player.angle = 0;
             player.vibeGuess = -1;
             player.vibeLocked = false;
             player.drawGuessed = false;
@@ -558,6 +574,8 @@ class GameRoom extends Room {
             this.updateDrawitState();
         } else if (this.state.gameType === 'whoami') {
             this.updateWhoamiState();
+        } else if (this.state.gameType === 'spacehunt') {
+            this.updateSpacehuntState();
         } else {
             this.updateBombermanState();
         }
@@ -644,6 +662,6 @@ class GameRoom extends Room {
 }
 
 // Mix the per-game logic into the room
-Object.assign(GameRoom.prototype, bombermanMethods, snakeMethods, hangmanMethods, vibecheckMethods, drawitMethods, whoamiMethods);
+Object.assign(GameRoom.prototype, bombermanMethods, snakeMethods, hangmanMethods, vibecheckMethods, drawitMethods, whoamiMethods, spacehuntMethods);
 
 module.exports = { GameRoom, GameState };
